@@ -218,3 +218,6 @@ How to reach Adam through it:
 The bells (every day, posted by `desk` to everyone): **9:00** STAND-UP — one line each: done · next · blocked · needs Adam. **13:30** nudge to Adam only if something still waits. **18:00** CLOSE — what shipped (receipt), what waits on Adam tomorrow. Answer the stand-up on the bus with one line; that is the meeting.
 
 Who attends (Adam, 2026-10-29): Adam · the General (claude-code) · Marketing · Finance · R&D · **Story** — the keeper of the Quantum Drift game master: eyes on the site every day, making sure the story is developing right (canon, the GM's upkeep, what players are doing with the world). Story reports one line like everyone else.
+
+## 13. Bugs go to Linear (2026-10-29)
+A bug filed on the wall (`/bugs`, or `bus card add --bug …`) is also filed as an issue on the Linear team board (AK47) when the server has `LINEAR_API_KEY`. The card shows the issue key; moving the card to done comments on the issue. No key = no Linear, the wall still works.

@@ -350,6 +350,10 @@ function card({ op, agent, id, title, col, by, note, prio, bug, where, did, expe
   writeJson(TASKS, t);
   const verb = op === 'add' ? `+ ${c.col}` : op === 'move' ? `→ ${c.col}` : op;
   if (op !== 'remove') toFreedcamp(c.id);
+  if (c.bug && op !== 'remove') {
+    if (!c.linear) void linearFile(c.id);
+    else if (op === 'move') void linearNote(c.id, `${col === 'done' ? 'Closed' : `Moved to ${col}`} on the Single Source board by ${crew().agents[c.by]?.name || c.by}${note ? `: ${note}` : ''}.`);
+  }
   busSend({ from: by || c.agent, kind: 'board', subject: `${c.bug ? '🐞 BUG' : 'BOARD'} ${c.agent}: ${c.title} ${verb}`, body: note || (c.bug && op === 'add' ? [c.report.where && `Where: ${c.report.where}`, c.report.saw && `Saw: ${c.report.saw}`].filter(Boolean).join('\n') : '') });
   return c;
 }
@@ -844,6 +848,55 @@ async function sendInviteEmail({ to, name, link, byName }) {
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(j.message || j.error || `Resend ${res.status}`);
   return j.id || true;
+}
+
+// ── Linear: every bug filed in the room is an issue on the team board ───────
+// (Adam, 2026-10-29: "link to Linear since it was designed to post bugs".)
+// Needs LINEAR_API_KEY (a personal key from Linear → Settings → API) and the
+// team key (LINEAR_TEAM, default AK47). Without the key nothing happens and
+// the room works as before. The card carries the issue's identifier and url;
+// moving the card to done leaves a comment on the issue with the note.
+const LINEAR_KEY = () => process.env.LINEAR_API_KEY || envFromAktion('LINEAR_API_KEY');
+const LINEAR_TEAM = process.env.LINEAR_TEAM || 'AK47';
+const LINEAR_PRIO = { urgent: 1, high: 2, normal: 3, low: 4 };
+let linearTeamId = null;
+async function linearGql(query, variables) {
+  const key = LINEAR_KEY(); if (!key) return null;
+  const res = await fetch('https://api.linear.app/graphql', { method: 'POST', headers: { Authorization: key, 'Content-Type': 'application/json' }, body: JSON.stringify({ query, variables }) });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || j.errors) throw new Error(j.errors?.[0]?.message || `Linear ${res.status}`);
+  return j.data;
+}
+async function linearTeam() {
+  if (linearTeamId) return linearTeamId;
+  const d = await linearGql('query($key:String!){ teams(filter:{key:{eq:$key}}){ nodes{ id } } }', { key: LINEAR_TEAM });
+  linearTeamId = d?.teams?.nodes?.[0]?.id || null;
+  if (!linearTeamId) throw new Error(`no Linear team ${LINEAR_TEAM}`);
+  return linearTeamId;
+}
+function linearBody(c) {
+  const r = c.report || {}; const who = crew().agents[c.reporter || c.by]?.name || c.reporter || c.by;
+  const room = PUBLIC_URL() ? `${PUBLIC_URL()}/bugs` : 'the Single Source bug wall';
+  return [r.where && `**Where:** ${r.where}`, r.did && `**Did:** ${r.did}`, r.expected && `**Expected:** ${r.expected}`, r.saw && `**Saw:** ${r.saw}`, c.note && `**Note:** ${c.note}`, '', `Filed by ${who} from ${room} (card ${c.id}, owner ${c.agent}).`].filter((x) => x !== undefined && x !== false).join('\n');
+}
+async function linearFile(cardId) {
+  try {
+    if (!LINEAR_KEY()) return;
+    const c = tasks().cards.find((x) => x.id === cardId); if (!c || !c.bug || c.linear) return;
+    const teamId = await linearTeam();
+    const d = await linearGql('mutation($i:IssueCreateInput!){ issueCreate(input:$i){ success issue{ id identifier url } } }',
+      { i: { teamId, title: c.title.slice(0, 250), description: linearBody(c), priority: LINEAR_PRIO[c.prio] ?? 3 } });
+    const issue = d?.issueCreate?.issue; if (!issue) return;
+    const t = tasks(); const c2 = t.cards.find((x) => x.id === cardId);
+    if (c2) { c2.linear = { id: issue.id, key: issue.identifier, url: issue.url, at: now() }; writeJson(TASKS, t); }
+    busSend({ from: 'single-source', kind: 'board', subject: `🐞 ${issue.identifier} filed in Linear: ${c.title}`, body: issue.url });
+  } catch (e) { console.error('linear file failed:', e.message); }
+}
+async function linearNote(cardId, text) {
+  try {
+    const c = tasks().cards.find((x) => x.id === cardId); if (!c?.linear?.id || !LINEAR_KEY()) return;
+    await linearGql('mutation($i:CommentCreateInput!){ commentCreate(input:$i){ success } }', { i: { issueId: c.linear.id, body: text } });
+  } catch (e) { console.error('linear note failed:', e.message); }
 }
 
 async function makeInvite({ name, email, by }, req) {

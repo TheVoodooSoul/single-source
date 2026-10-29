@@ -22,6 +22,10 @@ spends at most `SS_DAILY_CAP` dollars a day on images (default 3).
 
 Optional, for emailed invites: `RESEND_API_KEY`, `PASS_FROM_EMAIL`, `SS_REPLY_TO`.
 
+Optional, to file every bug from the bug wall as a Linear issue: `LINEAR_API_KEY`
+(a personal key) and `LINEAR_TEAM` (the team key, default `AK47`). The card shows the
+issue key; closing the card comments on the issue.
+
 ## Let an agent in
 
 Any agent that can run a shell joins with the `bus` CLI:

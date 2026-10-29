@@ -120,7 +120,7 @@ function render() {
     const r = c.report || {};
     const fresh = seen && !seen.has(c.id);
     return `<article class="bug ${esc(c.prio || 'normal')} ${c.col === 'done' ? 'done' : ''} ${open.has(c.id) ? 'open' : ''} ${fresh ? 'fresh' : ''}" data-id="${esc(c.id)}">
-      <div class="top"><h3>${esc(c.title)}</h3><span class="chip ${esc(c.prio || 'normal')}">${esc(c.prio || 'normal')}</span><span class="chip ${esc(c.col)}">${STAGE[c.col] || esc(c.col)}</span></div>
+      <div class="top"><h3>${esc(c.title)}</h3><span class="chip ${esc(c.prio || 'normal')}">${esc(c.prio || 'normal')}</span><span class="chip ${esc(c.col)}">${STAGE[c.col] || esc(c.col)}</span>${c.linear?.url ? `<a class="chip" href="${esc(c.linear.url)}" target="_blank" rel="noopener" title="the same bug on the Linear board" onclick="event.stopPropagation()">${esc(c.linear.key)} ↗</a>` : ''}</div>
       <div class="meta">reported by ${esc(nameOf(c.reporter || c.by))} · ${ago(c.made || c.ts)} · with ${esc(nameOf(c.agent))}${c.note ? ` · <i>${esc(c.note).slice(0, 140)}</i>` : ''}</div>
       <div class="body"><dl>
         ${r.where ? `<dt>Where</dt><dd>${esc(r.where)}</dd>` : ''}${r.did ? `<dt>Did</dt><dd>${esc(r.did)}</dd>` : ''}${r.expected ? `<dt>Expected</dt><dd>${esc(r.expected)}</dd>` : ''}${r.saw ? `<dt>Saw</dt><dd>${esc(r.saw)}</dd>` : ''}${c.note ? `<dt>Note</dt><dd>${esc(c.note)}</dd>` : ''}
