@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bug room · Single Source</title>
+<style>
+  /* The bug room. Same cards as the kanban — only the ones that are bugs. */
+  :root { --bg:#0b0d0c; --panel:#121614; --line:#26302b; --ink:#e9efe9; --dim:#8fa097; --go:#7CFF6B; --hot:#ff4d3d; --warn:#ffb020; --cool:#5fb4ff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:500 15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; min-height:100vh;
+         background-image:radial-gradient(#ffffff08 1px, transparent 1px); background-size:22px 22px; }
+  header { display:flex; flex-wrap:wrap; align-items:center; gap:12px; padding:14px 20px; border-bottom:1px solid var(--line); position:sticky; top:0; background:#0b0d0cf2; z-index:3; }
+  header h1 { font:900 22px/1 "Courier New",monospace; letter-spacing:.12em; text-transform:uppercase; color:var(--go); }
+  header h1 small { color:var(--dim); font:600 12px/1 -apple-system,sans-serif; letter-spacing:.04em; text-transform:none; margin-left:10px; }
+  header .sp { margin-left:auto; }
+  a.hud, button { font:600 13px/1 -apple-system,sans-serif; color:var(--ink); background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:9px 13px; cursor:pointer; text-decoration:none; }
+  a.hud:hover, button:hover { border-color:var(--go); }
+  button.primary { background:var(--go); color:#06120a; border-color:var(--go); font-weight:800; }
+  button:disabled { opacity:.45; cursor:default; }
+  #live { font:600 12px/1 "Courier New",monospace; color:var(--dim); display:flex; align-items:center; gap:6px; }
+  #live i { width:8px; height:8px; border-radius:50%; background:var(--go); box-shadow:0 0 8px var(--go); animation:pulse 2s infinite; }
+  #live.off i { background:var(--hot); box-shadow:none; animation:none; }
+  @keyframes pulse { 50% { opacity:.35; } }
+  main { display:grid; grid-template-columns:340px minmax(0,1fr); gap:18px; padding:18px 20px 60px; align-items:start; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; } }
+  form { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:10px; position:sticky; top:74px; }
+  @media (max-width:900px) { form { position:static; } }
+  form h2 { font:800 15px/1.2 -apple-system,sans-serif; }
+  form p { color:var(--dim); font-size:12.5px; }
+  label { display:flex; flex-direction:column; gap:4px; font:700 11px/1 -apple-system,sans-serif; letter-spacing:.07em; text-transform:uppercase; color:var(--dim); }
+  input, textarea, select { background:#0b0d0c; color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:9px 10px; font:500 14px/1.4 -apple-system,sans-serif; text-transform:none; letter-spacing:0; width:100%; }
+  textarea { resize:vertical; min-height:58px; }
+  input:focus, textarea:focus, select:focus { outline:2px solid var(--go); outline-offset:1px; }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  #st { font-size:13px; min-height:18px; color:var(--go); } #st.bad { color:var(--hot); }
+  #sum { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+  #sum button { padding:7px 11px; } #sum button.on { border-color:var(--go); color:var(--go); }
+  #sum button b { font-variant-numeric:tabular-nums; margin-left:4px; }
+  #feed { display:flex; flex-direction:column; gap:10px; }
+  .bug { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--dim); border-radius:12px; padding:12px 14px; }
+  .bug.urgent { border-left-color:var(--hot); } .bug.high { border-left-color:var(--warn); } .bug.normal { border-left-color:var(--cool); }
+  .bug.done { opacity:.6; }
+  .bug.fresh { animation:land 1.2s ease-out; }
+  @keyframes land { from { background:#1d3a22; } }
+  .bug .top { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px; cursor:pointer; }
+  .bug h3 { font:700 15px/1.3 -apple-system,sans-serif; flex:1 1 260px; }
+  .chip { font:700 10.5px/1 -apple-system,sans-serif; letter-spacing:.06em; text-transform:uppercase; padding:4px 7px; border-radius:6px; background:#ffffff10; color:var(--dim); white-space:nowrap; }
+  .chip.urgent { background:#ff4d3d22; color:var(--hot); } .chip.high { background:#ffb02022; color:var(--warn); }
+  .chip.todo { color:var(--ink); } .chip.doing { background:#5fb4ff22; color:var(--cool); } .chip.review { background:#ffb02022; color:var(--warn); } .chip.done { background:#7cff6b22; color:var(--go); }
+  .meta { color:var(--dim); font-size:12.5px; margin-top:4px; }
+  .body { display:none; margin-top:10px; border-top:1px dashed var(--line); padding-top:10px; }
+  .bug.open .body { display:block; }
+  .body dl { display:grid; grid-template-columns:90px minmax(0,1fr); gap:6px 10px; font-size:13.5px; }
+  .body dt { color:var(--dim); font-weight:700; font-size:11px; letter-spacing:.06em; text-transform:uppercase; padding-top:2px; }
+  .body dd { white-space:pre-wrap; overflow-wrap:anywhere; }
+  .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; align-items:center; }
+  .acts select { width:auto; padding:7px 9px; font-size:13px; }
+  .acts input { flex:1 1 200px; padding:7px 9px; font-size:13px; }
+  #empty { color:var(--dim); padding:30px 10px; text-align:center; border:1px dashed var(--line); border-radius:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Bug room <small>report one · watch it move</small></h1>
+  <span id="live"><i></i><span id="liveT">live</span></span>
+  <span class="sp"></span>
+  <button id="meBtn" title="who is reporting"></button>
+  <a class="hud" href="/">← Back to the office</a>
+</header>
+<main>
+  <form id="f" autocomplete="off">
+    <h2>Found a bug?</h2>
+    <p>One bug per report. The title is enough — the rest helps whoever fixes it.</p>
+    <label>What is broken <input id="title" required maxlength="160" placeholder="Storyboard: Draw button does nothing"></label>
+    <label>Where <input id="where" maxlength="300" placeholder="aktionfilmai.com/writers-room/storyboard"></label>
+    <label>What you did <textarea id="did" placeholder="Opened Act 2, pressed Draw"></textarea></label>
+    <div class="two">
+      <label>Expected <textarea id="expected" placeholder="Frames start drawing"></textarea></label>
+      <label>What you saw <textarea id="saw" placeholder="Nothing. No message."></textarea></label>
+    </div>
+    <div class="two">
+      <label>How bad <select id="prio"><option value="urgent">Urgent — blocks people</option><option value="high">High</option><option value="normal" selected>Normal</option><option value="low">Low — cosmetic</option></select></label>
+      <label>Who fixes it <select id="owner"></select></label>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center"><button class="primary" id="go">Report the bug</button><a class="hud" href="/snap" title="screenshot a page, mark it up, drop it in chat">📸 Snap a screenshot</a></div>
+    <div id="st" role="status"></div>
+  </form>
+  <section>
+    <div id="sum"></div>
+    <div id="feed" aria-live="polite"></div>
+  </section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const TOKEN = localStorage.getItem('ss.token') || '';
+let me = localStorage.getItem('ss.me') || 'adam';
+async function api(path, body) {
+  const headers = { 'Content-Type': 'application/json' }; if (TOKEN) headers['X-SS-Token'] = TOKEN;
+  const r = await fetch(path, body ? { method:'POST', headers, body: JSON.stringify(body) } : { headers });
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+const STAGE = { todo:'New', doing:'Being fixed', review:'Check it', done:'Fixed' };
+const RANK = { urgent:0, high:1, normal:2, low:3 };
+let cards = [], people = {}, filter = localStorage.getItem('ss.bugs.filter') || 'open', open = new Set(), seen = null, sig = '';
+
+const ago = (ts) => { const s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000); return s < 90 ? 'just now' : s < 3600 ? `${Math.round(s/60)} min ago` : s < 86400 ? `${Math.round(s/3600)} h ago` : `${Math.round(s/86400)} d ago`; };
+const nameOf = (id) => people[id]?.name || id;
+
+function render() {
+  const bugs = cards.filter((c) => c.bug);
+  const n = (f) => bugs.filter(f).length;
+  const tabs = [['open', 'Open', (c) => c.col !== 'done'], ['mine', 'Mine to fix', (c) => c.agent === me && c.col !== 'done'], ['reported', 'I reported', (c) => c.reporter === me], ['review', 'Check it', (c) => c.col === 'review'], ['done', 'Fixed', (c) => c.col === 'done'], ['all', 'All', () => true]];
+  $('#sum').innerHTML = tabs.map(([k, label, f]) => `<button data-f="${k}" class="${filter === k ? 'on' : ''}">${label}<b>${n(f)}</b></button>`).join('');
+  const pick = (tabs.find((t) => t[0] === filter) || tabs[0])[2];
+  const list = bugs.filter(pick).sort((a, b) => (a.col === 'done') - (b.col === 'done') || (RANK[a.prio] ?? 2) - (RANK[b.prio] ?? 2) || new Date(b.made || b.ts) - new Date(a.made || a.ts));
+  const owners = Object.keys(people);
+  $('#feed').innerHTML = list.length ? list.map((c) => {
+    const r = c.report || {};
+    const fresh = seen && !seen.has(c.id);
+    return `<article class="bug ${esc(c.prio || 'normal')} ${c.col === 'done' ? 'done' : ''} ${open.has(c.id) ? 'open' : ''} ${fresh ? 'fresh' : ''}" data-id="${esc(c.id)}">
+      <div class="top"><h3>${esc(c.title)}</h3><span class="chip ${esc(c.prio || 'normal')}">${esc(c.prio || 'normal')}</span><span class="chip ${esc(c.col)}">${STAGE[c.col] || esc(c.col)}</span></div>
+      <div class="meta">reported by ${esc(nameOf(c.reporter || c.by))} · ${ago(c.made || c.ts)} · with ${esc(nameOf(c.agent))}${c.note ? ` · <i>${esc(c.note).slice(0, 140)}</i>` : ''}</div>
+      <div class="body"><dl>
+        ${r.where ? `<dt>Where</dt><dd>${esc(r.where)}</dd>` : ''}${r.did ? `<dt>Did</dt><dd>${esc(r.did)}</dd>` : ''}${r.expected ? `<dt>Expected</dt><dd>${esc(r.expected)}</dd>` : ''}${r.saw ? `<dt>Saw</dt><dd>${esc(r.saw)}</dd>` : ''}${c.note ? `<dt>Note</dt><dd>${esc(c.note)}</dd>` : ''}
+      </dl>
+      <div class="acts">
+        <select data-k="col" aria-label="Stage">${Object.entries(STAGE).map(([k, v]) => `<option value="${k}" ${c.col === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+        <select data-k="prio" aria-label="How bad">${Object.keys(RANK).map((k) => `<option ${c.prio === k ? 'selected' : ''}>${k}</option>`).join('')}</select>
+        <select data-k="agent" aria-label="Who fixes it">${owners.map((k) => `<option value="${esc(k)}" ${c.agent === k ? 'selected' : ''}>${esc(nameOf(k))}</option>`).join('')}</select>
+        <input data-k="note" placeholder="Add a note — what was fixed, or what is still wrong" value="">
+        <button data-save>Save</button>
+      </div></div>
+    </article>`;
+  }).join('') : `<div id="empty">${filter === 'open' ? 'No open bugs. Report one on the left.' : 'Nothing here.'}</div>`;
+  seen = new Set(bugs.map((c) => c.id));
+}
+
+async function load() {
+  try {
+    const [b, c] = await Promise.all([api('/api/board'), api('/api/crew')]);
+    people = c.agents || {}; cards = b.cards || [];
+    $('#live').classList.remove('off'); $('#liveT').textContent = 'live';
+    const next = JSON.stringify([cards.filter((x) => x.bug), Object.keys(people)]);
+    // Do not redraw under someone's hands: only when something changed and no field in the feed has focus.
+    if (next !== sig && !$('#feed').contains(document.activeElement)) { sig = next; render(); fillOwners(); }
+  } catch (e) { $('#live').classList.add('off'); $('#liveT').textContent = 'offline — retrying'; }
+}
+function fillOwners() {
+  const sel = $('#owner'), keep = sel.value || 'claude-code';
+  sel.innerHTML = Object.keys(people).map((k) => `<option value="${esc(k)}">${esc(nameOf(k))}</option>`).join('');
+  sel.value = people[keep] ? keep : Object.keys(people)[0] || '';
+  $('#meBtn').textContent = `You: ${nameOf(me)}`;
+}
+
+$('#sum').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; filter = b.dataset.f; localStorage.setItem('ss.bugs.filter', filter); render(); });
+$('#feed').addEventListener('click', async (e) => {
+  const art = e.target.closest('.bug'); if (!art) return; const id = art.dataset.id;
+  if (e.target.closest('.top')) { open.has(id) ? open.delete(id) : open.add(id); art.classList.toggle('open'); return; }
+  if (e.target.closest('[data-save]')) {
+    const v = (k) => art.querySelector(`[data-k="${k}"]`).value; const btn = e.target.closest('button'); btn.disabled = true;
+    try { const note = v('note').trim(); await api('/api/card', { op:'edit', id, col: v('col'), prio: v('prio'), agent: v('agent'), by: me, ...(note ? { note } : {}) }); document.activeElement?.blur(); sig = ''; await load(); }
+    catch (err) { alertText(err.message, true); } finally { btn.disabled = false; }
+  }
+});
+function alertText(t, bad) { const s = $('#st'); s.textContent = t; s.className = bad ? 'bad' : ''; }
+$('#f').addEventListener('submit', async (e) => {
+  e.preventDefault(); const title = $('#title').value.trim(); if (!title) return;
+  $('#go').disabled = true; alertText('Sending…');
+  try {
+    const c = await api('/api/card', { op:'add', bug:true, title, agent: $('#owner').value || 'claude-code', by: me, prio: $('#prio').value, where: $('#where').value, did: $('#did').value, expected: $('#expected').value, saw: $('#saw').value });
+    for (const k of ['title', 'where', 'did', 'expected', 'saw']) $('#' + k).value = '';
+    open.add(c.id); filter = 'open'; sig = ''; await load(); alertText(`Reported. It is with ${nameOf(c.agent)} — it also went to the room chat.`);
+  } catch (err) { alertText(err.message, true); } finally { $('#go').disabled = false; }
+});
+$('#meBtn').onclick = () => { const v = prompt('Who are you in this room? (agent id)', me); if (v) { me = v.trim().toLowerCase(); localStorage.setItem('ss.me', me); sig = ''; load(); } };
+load(); setInterval(load, 4000);
+</script>
+</body>
+</html>

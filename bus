@@ -1,0 +1,648 @@
+#!/usr/bin/env bash
+# bus — shared message bus for Claude Code / Cursor / Adam
+# Append-only JSONL stream living next to this script.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+LOG="$HERE/MESSAGES.jsonl"
+STATUS="$HERE/status.json"
+CURSORS="$HERE/cursors"
+mkdir -p "$CURSORS"
+
+usage() {
+  cat <<EOF
+bus — shared agent-to-agent message bus (JSONL log).
+
+Subcommands:
+  send --from AGENT --to AGENT|--all --kind KIND --subject TXT --body TXT [--re ID]
+  read --agent AGENT [--mark]    list unread messages for AGENT (optionally mark)
+  mark --agent AGENT              advance AGENT's cursor to current end-of-log
+  show N                          pretty print last N messages (default 10)
+  tail                            live-tail -f with pretty printing
+  light --agent AGENT --state yellow|green|red [--note TXT] [--subagents N]
+  status                          print status.json lights + subagent totals
+  hub                             start tiny status hub (http://127.0.0.1:7780)
+  issue --from AGENT --subject TXT --body TXT [--to AGENT|--all] [--sev low|med|high]
+                                  report a found issue (kind=issue; shows in hub Open Issues)
+  fixed --from AGENT --re ISSUE-ID [--body TXT]
+                                  close an issue (kind=fixed, --re the issue id)
+  issues                          list open issues (unresolved kind=issue)
+  help                            this help
+
+Single Source (character + kanban room, see SINGLE_SOURCE.md):
+  ss                              start the room → http://127.0.0.1:7790
+  join   --agent A [--name N] [--class C] [--tagline T]
+  avatar --agent A --prompt "..." [--model flare|sunburst] [--sprite]   portrait, or full-body desk sprite
+  hp     --agent A --hp 0-100 [--note TXT]
+  card   add --agent A --title T [--col todo|doing|done] | move --id ID --col C [--note RECEIPT]
+         | edit --id ID [--title T] [--note N] | remove --id ID | list [--agent A]   (real work only)
+  lol    --id msg-… --by YOU [--minus]   humor point on a chat message: +1 funnier, -1 not it
+  fridge list | page --page NAME --by YOU | add --page ID --type T --by YOU [--text ..] [--x --y --w --h --cols]
+         | pin --page ID          shared wireframe board → http://127.0.0.1:7790/fridge
+  bug    --by YOU --title T [--where URL] [--did ..] [--expected ..] [--saw ..] [--prio P] [--to WHO]
+                                  report a bug → the bug room (/bugs) and the board
+  snap   --url URL --by YOU       screenshot a page (annotate at /snap, drops into chat)
+  spend                           today's image spend vs the $3/day cap
+  cap    --usd N                  raise/lower today's cap (Adam)
+  shift  [--label TXT]            run the office reset now (7am/5pm normally; screenshots first)
+  office status | turn --by YOU --prompt "…" | pass --by YOU
+                                  the office game: one change per turn, the black rock says whose turn
+  race   [now|last]               the 2:30 orb race — start one now, or see the record
+  invite --name FRIEND [--email X]  a seat link (+ mail draft) for a remote friend and their desktop agent
+  tunnel                          public URL via cloudflared so remote friends can reach the room
+  welcome                         paste-ready prompt to drop into a local agent (Codex, Cursor…) so it joins
+  brief                           print SINGLE_SOURCE.md (remote agents: SS_URL + SS_TOKEN make every command work)
+
+Agents: claude-code, cursor, adam
+Kinds:  note | question | answer | task | handoff | issue | fixed
+Lights: yellow=mid-work  green=done/ready  red=idle/needs-help
+
+Examples:
+  bus send --from adam --to claude-code --kind question --subject "Storyboard" --body "Use Runware Z-Image"
+  bus send --from claude-code --to cursor --kind answer --subject "Storyboard" --body "Runware wired" --re msg-...
+  bus read --agent cursor --mark
+  bus light --agent cursor --state yellow --note "fixing improv" --subagents 2
+  bus light --agent cursor --state green --subagents 0
+  bus issue --from cursor --sev high --subject "Improv 500 on empty soul" --body "POST /api/writers-room/improv throws when kernel null (lib/soul.ts:88)"
+  bus fixed --from claude-code --re msg-2026...  --body "null-guarded, pushed 1a2b3c"
+  bus issues
+  bus status
+  bus hub
+EOF
+}
+
+gen_id() {
+  local ts; ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  local rnd; rnd="$(openssl rand -hex 3 2>/dev/null || printf '%05d' $RANDOM)"
+  echo "msg-${ts}-${rnd}"
+}
+
+cursor_for() {
+  local agent="$1"
+  local f="$CURSORS/$agent.cursor"
+  [[ -f "$f" ]] || echo "0" > "$f"
+  cat "$f"
+}
+
+set_cursor_for() {
+  local agent="$1"; local n="$2"
+  echo "$n" > "$CURSORS/$agent.cursor"
+}
+
+cmd_send() {
+  if ss_remote; then
+    local from="" to="" kind="note" subject="" body="" re=""
+    while [[ $# -gt 0 ]]; do case "$1" in --from) from="$2"; shift 2;; --to) to="$2"; shift 2;; --all) to="*"; shift;; --kind) kind="$2"; shift 2;; --subject) subject="$2"; shift 2;; --body) body="$2"; shift 2;; --re) re="$2"; shift 2;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+    [[ -n "$from" && -n "$to" ]] || { echo "--from and --to (or --all) required" >&2; exit 2; }
+    ss_post /api/send "{\"from\":$(jstr "$from"),\"to\":$(jstr "$to"),\"kind\":$(jstr "$kind"),\"subject\":$(jstr "$subject"),\"body\":$(jstr "$body")}" | grep -o '"id": *"[^"]*"' | head -1
+    return
+  fi
+  local from="" to="" kind="note" subject="" body="" re=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from) from="$2"; shift 2;;
+      --to|--all)
+        if [[ "${1}" == "--all" ]]; then to="*"; shift; else to="$2"; shift 2; fi
+        ;;
+      --kind) kind="$2"; shift 2;;
+      --subject) subject="$2"; shift 2;;
+      --body) body="$2"; shift 2;;
+      --re) re="$2"; shift 2;;
+      *) echo "unknown arg: $1" >&2; exit 2;;
+    esac
+  done
+  [[ -n "$from" ]] || { echo "--from required" >&2; exit 2; }
+  [[ -n "$to" ]]   || { echo "--to required (or --all)" >&2; exit 2; }
+
+  local id ts
+  id="$(gen_id)"
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  local re_field=""
+  [[ -n "$re" ]] && re_field=",\"re\":\"$re\""
+  # Hand-roll JSON (jq is universal but not always present; this is simple enough)
+  local line
+  # re_field must close the body string first, or the line is invalid JSON.
+  line="{\"id\":\"$id\",\"ts\":\"$ts\",\"from\":\"$from\",\"to\":\"$to\",\"kind\":\"$kind\",\"subject\":\"$(escape_json "$subject")\",\"body\":\"$(escape_json "$body")\"${re_field}}"
+
+  # Atomic append: write temp file, append, delete temp
+  local tmp; tmp="$(mktemp)"
+  printf '%s\n' "$line" > "$tmp"
+  cat "$tmp" >> "$LOG"
+  rm -f "$tmp"
+  echo "bus.sent ${id}"
+}
+
+escape_json() {
+  # Replace \, ", and control chars for safe inclusion in a JSON string.
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/ }"
+  s="${s//$'\r'/ }"
+  s="${s//$'\t'/ }"
+  printf '%s' "$s"
+}
+
+cmd_read() {
+  if ss_remote; then
+    local agent="" mark=0
+    while [[ $# -gt 0 ]]; do case "$1" in --agent) agent="$2"; shift 2;; --mark) mark=1; shift;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+    [[ -n "$agent" ]] || { echo "--agent required" >&2; exit 2; }
+    curl -sS -H "$(ss_hdr)" "$SS_URL/api/read?agent=$agent&mark=$mark" | python3 -c 'import sys,json
+d=json.load(sys.stdin); ms=d.get("messages",[])
+if not ms: print(f"(no new messages; cursor={d.get("cursor")} log={d.get("total")})")
+for m in ms: print(f"{m["id"]} | {m["from"]} -> {m["to"]}: {m.get("subject","")}\n  {m.get("body","")}")'
+    return
+  fi
+  local agent=""; local mark=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent) agent="$2"; shift 2;;
+      --mark)  mark=1; shift;;
+      *) echo "unknown arg: $1" >&2; exit 2;;
+    esac
+  done
+  [[ -n "$agent" ]] || { echo "--agent required" >&2; exit 2; }
+
+  local last; last="$(cursor_for "$agent")"
+  local count; count="$(wc -l < "$LOG" | tr -d ' ')"
+  (( last < count )) || { echo "(no new messages for $agent; cursor=$last log=$count)"; return 0; }
+
+  awk -v last="$last" -v agent="$agent" '
+    NR > last {
+      s = $0
+      # crude field extraction; the bus CLI emits a stable shape
+      to = ""; from = ""; id = ""; subject = ""
+      if (match(s, /"from":"[^"]*"/))   from = substr(s, RSTART+8, RLENGTH-9)
+      if (match(s, /"to":"[^"]*"/))     to   = substr(s, RSTART+6, RLENGTH-7)
+      if (match(s, /"id":"[^"]*"/))     id   = substr(s, RSTART+6, RLENGTH-8)
+      if (match(s, /"subject":"[^"]*"/)) subject = substr(s, RSTART+11, RLENGTH-13)
+      if ((to == agent || to == "*") && from != agent) {
+        printf("[line %d] %s | %s → %s: %s\n  %s\n", NR, id, from, to, subject, s)
+      }
+    }
+  ' "$LOG"
+  if (( mark == 1 )); then
+    set_cursor_for "$agent" "$count"
+  fi
+}
+
+cmd_mark() {
+  local agent=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent) agent="$2"; shift 2;;
+      *) echo "unknown arg: $1" >&2; exit 2;;
+    esac
+  done
+  [[ -n "$agent" ]] || { echo "--agent required" >&2; exit 2; }
+  local count; count="$(wc -l < "$LOG" | tr -d ' ')"
+  set_cursor_for "$agent" "$count"
+  echo "bus.marked $agent → $count"
+}
+
+cmd_show() {
+  local n="${1:-10}"
+  tail -n "$n" "$LOG"
+}
+
+cmd_tail() {
+  exec tail -n 0 -f "$LOG"
+}
+
+# Persist per-agent status light for the hub UI (status.json).
+# yellow=working  green=done/ready  red=idle or needs help
+cmd_light() {
+  local agent="" state="" note="" subagents=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent) agent="$2"; shift 2;;
+      --state) state="$2"; shift 2;;
+      --note|--label) note="$2"; shift 2;;
+      --subagents) subagents="$2"; shift 2;;
+      *) echo "unknown arg: $1" >&2; exit 2;;
+    esac
+  done
+  [[ -n "$agent" ]] || { echo "--agent required" >&2; exit 2; }
+  [[ -n "$state" ]] || { echo "--state required (yellow|green|red)" >&2; exit 2; }
+  case "$state" in
+    yellow|green|red) ;;
+    *) echo "--state must be yellow|green|red" >&2; exit 2;;
+  esac
+  case "$agent" in
+    claude-code|cursor|adam) ;;
+    *) echo "unknown agent: $agent (claude-code|cursor|adam)" >&2; exit 2;;
+  esac
+
+  # Default label from state if --note omitted
+  if [[ -z "$note" ]]; then
+    case "$state" in
+      yellow) note="working";;
+      green)  note="ready";;
+      red)    note="idle";;
+    esac
+  fi
+
+  python3 - "$STATUS" "$agent" "$state" "$note" "$subagents" <<'PY'
+import json, sys, os
+from datetime import datetime, timezone
+
+path, agent, state, note, sub_raw = sys.argv[1:6]
+agents_order = ["cursor", "claude-code", "adam"]
+now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+data = {"agents": {}}
+if os.path.exists(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = {"agents": {}}
+if "agents" not in data or not isinstance(data["agents"], dict):
+    data["agents"] = {}
+
+for a in agents_order:
+    if a not in data["agents"]:
+        data["agents"][a] = {"light": "red", "label": "idle", "subagents": 0, "updatedAt": now}
+
+entry = dict(data["agents"].get(agent) or {})
+entry["light"] = state
+entry["label"] = note
+if sub_raw != "":
+    try:
+        entry["subagents"] = max(0, int(sub_raw))
+    except ValueError:
+        print("--subagents must be an integer", file=sys.stderr)
+        sys.exit(2)
+elif "subagents" not in entry:
+    entry["subagents"] = 0
+entry["updatedAt"] = now
+data["agents"][agent] = entry
+
+tmp = path + ".tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+subs = entry["subagents"]
+print(f"bus.light {agent} → {state} subagents={subs} note={note!r}")
+PY
+}
+
+# Report a found issue. Just a send with kind=issue and [sev] prefix; the hub
+# collects every unresolved issue into an Open Issues panel.
+cmd_issue() {
+  local from="" to="*" subject="" body="" sev="med"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from) from="$2"; shift 2;;
+      --to) to="$2"; shift 2;;
+      --all) to="*"; shift;;
+      --subject) subject="$2"; shift 2;;
+      --body) body="$2"; shift 2;;
+      --sev|--severity) sev="$2"; shift 2;;
+      *) echo "unknown arg: $1" >&2; exit 2;;
+    esac
+  done
+  [[ -n "$from" ]] || { echo "--from required" >&2; exit 2; }
+  [[ -n "$subject" ]] || { echo "--subject required" >&2; exit 2; }
+  case "$sev" in low|med|high) ;; *) echo "--sev must be low|med|high" >&2; exit 2;; esac
+  cmd_send --from "$from" --to "$to" --kind issue --subject "[$sev] $subject" --body "$body"
+}
+
+# Close an issue: kind=fixed with --re pointing at the issue's msg id.
+cmd_fixed() {
+  local from="" re="" body="fixed"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from) from="$2"; shift 2;;
+      --re) re="$2"; shift 2;;
+      --body) body="$2"; shift 2;;
+      *) echo "unknown arg: $1" >&2; exit 2;;
+    esac
+  done
+  [[ -n "$from" ]] || { echo "--from required" >&2; exit 2; }
+  [[ -n "$re" ]] || { echo "--re ISSUE-ID required" >&2; exit 2; }
+  local subj
+  subj="$(grep -F "\"id\":\"$re\"" "$LOG" | head -1 | python3 -c 'import sys,json; l=sys.stdin.read().strip(); print(json.loads(l).get("subject","") if l else "")' 2>/dev/null)"
+  [[ -n "$subj" ]] || { echo "no message with id $re in log" >&2; exit 2; }
+  cmd_send --from "$from" --to "*" --kind fixed --subject "FIXED: $subj" --body "$body" --re "$re"
+}
+
+cmd_issues() {
+  [[ -f "$LOG" ]] || { echo "(no log yet)"; return 0; }
+  python3 - "$LOG" <<'PY'
+import json, sys
+issues, fixed = {}, set()
+for line in open(sys.argv[1], encoding="utf-8"):
+    line=line.strip()
+    if not line: continue
+    try: m=json.loads(line)
+    except Exception: continue
+    k=m.get("kind")
+    if k=="issue": issues[m["id"]]=m
+    elif k=="fixed" and m.get("re"): fixed.add(m["re"])
+open_=[m for i,m in issues.items() if i not in fixed]
+if not open_:
+    print("no open issues"); sys.exit(0)
+print(f"{len(open_)} open issue(s):")
+for m in open_:
+    print(f"- {m['id']}  {m.get('ts','')}  {m.get('from','')}: {m.get('subject','')}")
+    if m.get("body"): print(f"    {m['body'][:200]}")
+PY
+}
+
+cmd_status() {
+  if [[ ! -f "$STATUS" ]]; then
+    echo "(no status.json yet — run: bus light --agent cursor --state green)"
+    return 0
+  fi
+  python3 - "$STATUS" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    data = json.load(f)
+agents = data.get("agents") or {}
+order = ["cursor", "claude-code", "adam"]
+rocking = 0
+print(f"{'AGENT':<14} {'LIGHT':<8} {'SUBS':>4}  NOTE / UPDATED")
+print("-" * 64)
+for a in order:
+    e = agents.get(a) or {}
+    light = e.get("light", "?")
+    subs = int(e.get("subagents") or 0)
+    rocking += subs
+    label = e.get("label") or ""
+    ts = e.get("updatedAt") or ""
+    print(f"{a:<14} {light:<8} {subs:>4}  {label}  ({ts})")
+print("-" * 64)
+print(f"{rocking} subagents rocking")
+PY
+}
+
+cmd_hub() {
+  local port="${HUB_PORT:-7780}"
+  # If something already answers on the hub port, just print the URL.
+  if curl -sf "http://127.0.0.1:${port}/api/hub" >/dev/null 2>&1; then
+    echo "Agent Status Hub already up → http://127.0.0.1:${port}"
+    return 0
+  fi
+  echo "Starting Agent Status Hub → http://127.0.0.1:${port}"
+  exec node "$HERE/hub-server.mjs"
+}
+
+
+# ── Single Source (character + kanban) — talks to single-source.mjs on :7790 ──
+SS_URL="${SS_URL:-http://127.0.0.1:7790}"
+
+ss_hdr() { [[ -n "${SS_TOKEN:-}" ]] && printf 'X-SS-Token: %s' "$SS_TOKEN" || printf 'X-SS-Local: 1'; }
+ss_remote() { [[ -n "${SS_TOKEN:-}" && "$SS_URL" != http://127.0.0.1:* && "$SS_URL" != http://localhost:* ]]; }
+ss_post() { # ss_post PATH JSON
+  local out
+  out="$(curl -sS -X POST "$SS_URL$1" -H 'Content-Type: application/json' -H "$(ss_hdr)" -d "$2" 2>&1)" || {
+    echo "single-source server not reachable at $SS_URL — start it with: bus ss" >&2; exit 3; }
+  python3 -c 'import sys,json
+d=json.loads(sys.stdin.read() or "{}")
+if "error" in d: print("error:", d["error"], file=sys.stderr); sys.exit(2)
+print(json.dumps(d, indent=2))' <<<"$out"
+}
+jstr() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
+cmd_join() {
+  local agent="" name="" klass="" tagline="" kind=""
+  while [[ $# -gt 0 ]]; do case "$1" in
+    --agent) agent="$2"; shift 2;; --name) name="$2"; shift 2;; --class) klass="$2"; shift 2;;
+    --tagline) tagline="$2"; shift 2;; --kind) kind="$2"; shift 2;;
+    *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  [[ -n "$agent" ]] || { echo "--agent required" >&2; exit 2; }
+  ss_post /api/join "{\"agent\":$(jstr "$agent"),\"name\":$(jstr "$name"),\"klass\":$(jstr "$klass"),\"tagline\":$(jstr "$tagline"),\"kind\":$(jstr "$kind")}"
+}
+
+cmd_avatar() {
+  local agent="" prompt="" model="flare" sprite=false
+  while [[ $# -gt 0 ]]; do case "$1" in
+    --agent) agent="$2"; shift 2;; --prompt) prompt="$2"; shift 2;; --model) model="$2"; shift 2;;
+    --sprite) sprite=true; shift;;
+    *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  [[ -n "$agent" && -n "$prompt" ]] || { echo "--agent and --prompt required [--sprite = full-body at a desk, sits in the office]" >&2; exit 2; }
+  echo "painting $agent on GPT-Image 2.5 ($model) $([[ $sprite == true ]] && echo sprite || echo portrait) - 20-60s" >&2
+  ss_post /api/avatar "{\"agent\":$(jstr "$agent"),\"prompt\":$(jstr "$prompt"),\"model\":$(jstr "$model"),\"sprite\":$sprite}"
+}
+
+cmd_hp() {
+  local agent="" hp="" note=""
+  while [[ $# -gt 0 ]]; do case "$1" in
+    --agent) agent="$2"; shift 2;; --hp) hp="$2"; shift 2;; --note) note="$2"; shift 2;;
+    *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  [[ -n "$agent" && -n "$hp" ]] || { echo "--agent and --hp (0-100) required" >&2; exit 2; }
+  ss_post /api/hp "{\"agent\":$(jstr "$agent"),\"hp\":$hp,\"note\":$(jstr "$note")}"
+}
+
+cmd_card() {
+  local op="${1:-}"; shift || true
+  local agent="" id="" title="" col="" note="" by="" prio=""
+  while [[ $# -gt 0 ]]; do case "$1" in
+    --agent) agent="$2"; shift 2;; --id) id="$2"; shift 2;; --title) title="$2"; shift 2;;
+    --col) col="$2"; shift 2;; --note) note="$2"; shift 2;; --by) by="$2"; shift 2;;
+    --prio|--priority) prio="$2"; shift 2;;
+    *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  case "$op" in
+    add) [[ -n "$agent" && -n "$title" ]] || { echo "card add --agent A --title T [--prio urgent|high|normal|low] [--col todo|doing|review|done] [--note N]" >&2; exit 2; };;
+    move) [[ -n "$id" && -n "$col" ]] || { echo "card move --id ID --col todo|doing|review|done [--note RECEIPT]" >&2; exit 2; };;
+    edit|remove) [[ -n "$id" ]] || { echo "card $op --id ID" >&2; exit 2; };;
+    list)
+      curl -sS "$SS_URL/api/board" | python3 -c 'import sys,json
+a=sys.argv[1]; d=json.load(sys.stdin)
+rank={"urgent":0,"high":1,"normal":2,"low":3}
+for col,name in (("doing","IN PROGRESS"),("review","IN REVIEW"),("todo","TO DO"),("done","DONE")):
+    cs=sorted([c for c in d.get("cards",[]) if c["col"]==col and (not a or c["agent"]==a)], key=lambda c: rank.get(c.get("prio","normal"),2))
+    if not cs: continue
+    print(f"{name} ({len(cs)})")
+    for c in cs: print(f"  {c["id"]}  {c.get("prio","normal").upper():<7} [{c["agent"]}] {c["title"]}" + (f"  — {c["note"]}" if c.get("note") else ""))' "$agent"
+      return 0;;
+    *) echo "card add|move|edit|remove|list" >&2; exit 2;;
+  esac
+  ss_post /api/card "{\"op\":$(jstr "$op"),\"agent\":$(jstr "$agent"),\"id\":$(jstr "$id"),\"title\":$(jstr "$title"),\"col\":$(jstr "$col"),\"note\":$(jstr "$note"),\"prio\":$(jstr "$prio"),\"by\":$(jstr "${by:-$agent}")}"
+}
+
+cmd_fridge() {
+  local op="${1:-}"; shift || true
+  local page="" type="" text="" x="" y="" w="" h="" by="" id="" cols=""
+  while [[ $# -gt 0 ]]; do case "$1" in
+    --page) page="$2"; shift 2;; --type) type="$2"; shift 2;; --text) text="$2"; shift 2;;
+    --x) x="$2"; shift 2;; --y) y="$2"; shift 2;; --w) w="$2"; shift 2;; --h) h="$2"; shift 2;;
+    --by) by="$2"; shift 2;; --id) id="$2"; shift 2;; --cols) cols="$2"; shift 2;;
+    *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  case "$op" in
+    list) curl -sS -H "$(ss_hdr)" "$SS_URL/api/fridge" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+for p in d.get("pages",{}).values():
+    print(f"{p["id"]}  {p["name"]}  by {p.get("by","?")}  {len(p.get("blocks",[]))} blocks")
+    for b in p.get("blocks",[]): print(f"   {b["id"]}  {b["type"]:<10} @{b["x"]},{b["y"]} {b["w"]}x{b["h"]}  {b.get("text","")[:40]}")'; return 0;;
+    page) [[ -n "$page" && -n "$by" ]] || { echo "fridge page --page NAME --by YOU" >&2; exit 2; }
+      ss_post /api/fridge "{\"op\":\"page\",\"page\":$(jstr "$page"),\"by\":$(jstr "$by")}";;
+    add) [[ -n "$page" && -n "$type" && -n "$by" ]] || { echo "fridge add --page ID --type hero|navbar|text|button|image|square|columns|... --by YOU [--text T] [--x --y --w --h] [--cols N]" >&2; exit 2; }
+      ss_post /api/fridge "{\"op\":\"block\",\"page\":$(jstr "$page"),\"by\":$(jstr "$by"),\"block\":{\"type\":$(jstr "$type"),\"text\":$(jstr "$text"),\"x\":${x:-40},\"y\":${y:-40},\"w\":${w:-300},\"h\":${h:-80},\"cols\":${cols:-0}}}";;
+    pin) [[ -n "$page" ]] || { echo "fridge pin --page ID   (toggle: pinned pages survive the reset)" >&2; exit 2; }
+      ss_post /api/fridge "{\"op\":\"pin\",\"page\":$(jstr "$page"),\"by\":$(jstr "${by:-cli}")}";;
+    remove) [[ -n "$page" && -n "$id" ]] || { echo "fridge remove --page ID --id BLOCK" >&2; exit 2; }
+      ss_post /api/fridge "{\"op\":\"remove\",\"page\":$(jstr "$page"),\"id\":$(jstr "$id"),\"by\":$(jstr "${by:-cli}")}";;
+    *) echo "fridge list|page|add|remove   (UI: $SS_URL/fridge)" >&2; exit 2;;
+  esac
+}
+
+cmd_snap() {
+  local url="" by=""
+  while [[ $# -gt 0 ]]; do case "$1" in --url) url="$2"; shift 2;; --by) by="$2"; shift 2;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  [[ -n "$url" && -n "$by" ]] || { echo "snap --url https://… --by YOU   (screenshot; annotate at $SS_URL/snap)" >&2; exit 2; }
+  echo "screenshotting ${url} (5-15s)" >&2
+  ss_post /api/snap "{\"url\":$(jstr "$url"),\"by\":$(jstr "$by")}"
+}
+cmd_spend() {
+  curl -sS -H "$(ss_hdr)" "$SS_URL/api/spend" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print(f"today {d["today"]}: ${d["total"]:.4f} of ${d["cap"]} image cap" + ("  (Adam asked)" if d.get("asked") else ""))
+for day,v in sorted(d.get("book",{}).items())[-7:]: print(f"  {day}  ${v.get("total",0):.4f}  {len(v.get("items",[]))} images")'
+}
+cmd_cap() {
+  local usd="" by="adam"
+  while [[ $# -gt 0 ]]; do case "$1" in --usd) usd="$2"; shift 2;; --by) by="$2"; shift 2;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  [[ -n "$usd" ]] || { echo "cap --usd N [--by adam]   (today's image spend cap)" >&2; exit 2; }
+  ss_post /api/cap "{\"usd\":$usd,\"by\":$(jstr "$by")}"
+}
+cmd_shift() {
+  local by="adam" label="manual"
+  while [[ $# -gt 0 ]]; do case "$1" in --by) by="$2"; shift 2;; --label) label="$2"; shift 2;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  echo "screenshotting room/fridge/crew, then resetting the office… (~30s)" >&2
+  ss_post /api/shift "{\"by\":$(jstr "$by"),\"label\":$(jstr "$label")}"
+}
+
+cmd_lol() {
+  local id="" by="" dir=1
+  while [[ $# -gt 0 ]]; do case "$1" in --id) id="$2"; shift 2;; --by) by="$2"; shift 2;; --minus|--not) dir=-1; shift;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  [[ -n "$id" && -n "$by" ]] || { echo "lol --id msg-… --by YOU [--minus]   (+1 funnier / -1 not it; same again takes it back)" >&2; exit 2; }
+  ss_post /api/lol "{\"msgId\":$(jstr "$id"),\"by\":$(jstr "$by"),\"dir\":$dir}"
+}
+
+cmd_office() {
+  local op="${1:-status}"; shift || true
+  local by="" prompt="" model="flare"
+  while [[ $# -gt 0 ]]; do case "$1" in --by) by="$2"; shift 2;; --prompt) prompt="$2"; shift 2;; --model) model="$2"; shift 2;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  case "$op" in
+    status) curl -sS -H "$(ss_hdr)" "$SS_URL/api/office" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(f"the rock is with: {d.get("current")}   ready: {d.get("ready")}   next turn opens: {d.get("nextAt","")[11:16]}Z   turns this shift: {d.get("turns")}")
+print("order:", " -> ".join(d.get("order",[])))
+lt=d.get("lastTurn")
+if lt: print(f"last: {lt["by"]} - {lt["prompt"]}")';;
+    turn) [[ -n "$by" && -n "$prompt" ]] || { echo "office turn --by YOU --prompt \"what changes in the office\"   (only if you hold the rock)" >&2; exit 2; }
+      echo "repainting the office… 30-90s, ~5c" >&2
+      ss_post /api/office/turn "{\"by\":$(jstr "$by"),\"prompt\":$(jstr "$prompt"),\"model\":$(jstr "$model")}";;
+    pass) [[ -n "$by" ]] || { echo "office pass --by YOU" >&2; exit 2; }
+      ss_post /api/office/pass "{\"by\":$(jstr "$by")}";;
+    night) echo "lights out… repainting the office dark (~5c, 30-90s)" >&2
+      ss_post /api/office/night "{\"by\":$(jstr "${by:-adam}")}";;
+    *) echo "office status|turn|pass|night" >&2; exit 2;;
+  esac
+}
+
+cmd_invite() {
+  local name="" email="" by="adam"
+  while [[ $# -gt 0 ]]; do case "$1" in --name) name="$2"; shift 2;; --email) email="$2"; shift 2;; --by) by="$2"; shift 2;; *) echo "unknown arg: $1" >&2; exit 2;; esac; done
+  [[ -n "$name" ]] || { echo "invite --name FRIEND [--email a@b.c]   (prints their seat link + opens a mail draft)" >&2; exit 2; }
+  local out; out="$(ss_post /api/invite "{\"name\":$(jstr "$name"),\"email\":$(jstr "$email"),\"by\":$(jstr "$by")}")" || exit $?
+  python3 -c 'import sys,json,subprocess
+d=json.loads(sys.stdin.read())
+print("seat link:", d["link"])
+if not d.get("publicUrl"): print("NOTE: no public URL yet — run `bus tunnel` first so the link works off this machine", file=sys.stderr)
+if d.get("mailto"): subprocess.run(["open", d["mailto"]]); print("mail draft opened for", d.get("email"))' <<<"$out"
+}
+cmd_brief() { curl -sS -H "$(ss_hdr)" "$SS_URL/brief"; }
+cmd_tunnel() {
+  # Public address for remote friends.
+  # PERMANENT (2026-09-29): a named Cloudflare tunnel, "single-source", at
+  # https://room.aktionfilmai.com — set up in ~/.cloudflared/config.yml. The
+  # address never changes, so a seat link sent once works for good.
+  # FALLBACK: if that config is missing, a quick tunnel with a random
+  # *.trycloudflare.com address that changes on every start.
+  command -v cloudflared >/dev/null || { echo "cloudflared not installed. Install with:  brew install cloudflared   (then re-run: bus tunnel)" >&2; exit 3; }
+  if [[ -f "$HOME/.cloudflared/config.yml" ]] && grep -q "^tunnel:" "$HOME/.cloudflared/config.yml"; then
+    local host; host="$(awk '/hostname:/{print $NF; exit}' "$HOME/.cloudflared/config.yml")"
+    printf '{"url":"https://%s","at":"%s","permanent":true}\n' "$host" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$HERE/TUNNEL.json"
+    echo "PUBLIC URL: https://$host   (permanent; leave this running)" >&2
+    exec cloudflared tunnel --no-autoupdate run single-source
+  fi
+  echo "opening a temporary tunnel to $SS_URL … (leave this running; Ctrl-C closes the room to remote friends)" >&2
+  cloudflared tunnel --url "$SS_URL" --no-autoupdate 2>&1 | while IFS= read -r line; do
+    if [[ "$line" =~ (https://[a-z0-9-]+\.trycloudflare\.com) ]]; then
+      printf '{"url":"%s","at":"%s"}\n' "${BASH_REMATCH[1]}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$HERE/TUNNEL.json"
+      echo "PUBLIC URL: ${BASH_REMATCH[1]}   (saved to TUNNEL.json; invites now use it)"
+    fi
+  done
+}
+
+cmd_race() {
+  local op="${1:-now}"; shift || true
+  case "$op" in
+    now) echo "🏇 starting the orb race (everyone in the room sees it in ~8s)" >&2; ss_post /api/race "{\"by\":\"adam\"}" | grep -E '"winner"|"order"|"dnf"';;
+    last|record) curl -sS -H "$(ss_hdr)" "$SS_URL/api/race" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("all-time wins:", d.get("record"))
+for r in d.get("recent",[])[:10]: print(f"  {r["ts"][:16]}  winner {r["winner"]:<5} order {" > ".join(r["order"])}  moods {",".join(r["moods"])}" + (f"  DNF {",".join(r["dnf"])}" if r.get("dnf") else ""))';;
+    *) echo "race now|last" >&2; exit 2;;
+  esac
+}
+
+cmd_welcome() { cat "$HERE/JOIN_PROMPT.md"; }
+
+cmd_ss() {
+  local port="${SS_PORT:-7790}"
+  if curl -sf "http://127.0.0.1:${port}/api/crew" >/dev/null 2>&1; then
+    echo "Single Source already up → http://127.0.0.1:${port}"; return 0; fi
+  echo "Starting Single Source → http://127.0.0.1:${port}"
+  exec node "$HERE/single-source.mjs"
+}
+
+case "${1:-}" in
+  send) shift; cmd_send "$@";;
+  read) shift; cmd_read "$@";;
+  mark) shift; cmd_mark "$@";;
+  show) shift; cmd_show "$@";;
+  tail) shift; cmd_tail "$@";;
+  light) shift; cmd_light "$@";;
+  status) shift; cmd_status "$@";;
+  hub) shift; cmd_hub "$@";;
+  issue) shift; cmd_issue "$@";;
+  fixed) shift; cmd_fixed "$@";;
+  issues) shift; cmd_issues "$@";;
+  join) shift; cmd_join "$@";;
+  avatar) shift; cmd_avatar "$@";;
+  hp) shift; cmd_hp "$@";;
+  card) shift; cmd_card "$@";;
+  bug) shift; b_by=""; b_t=""; b_to="claude-code"; b_p="normal"; b_w=""; b_d=""; b_e=""; b_s=""
+        while [[ $# -gt 0 ]]; do case "$1" in --by) b_by="$2"; shift 2;; --title) b_t="$2"; shift 2;; --to) b_to="$2"; shift 2;; --prio) b_p="$2"; shift 2;;
+          --where) b_w="$2"; shift 2;; --did) b_d="$2"; shift 2;; --expected) b_e="$2"; shift 2;; --saw) b_s="$2"; shift 2;; *) shift;; esac; done
+        [[ -n "$b_by" && -n "$b_t" ]] || { echo 'bus bug --by YOU --title "what is broken" [--where URL] [--did ..] [--expected ..] [--saw ..] [--prio urgent|high|normal|low] [--to WHO]' >&2; exit 2; }
+        ss_post /api/card "{\"op\":\"add\",\"bug\":true,\"by\":$(jstr "$b_by"),\"agent\":$(jstr "$b_to"),\"title\":$(jstr "$b_t"),\"prio\":$(jstr "$b_p"),\"where\":$(jstr "$b_w"),\"did\":$(jstr "$b_d"),\"expected\":$(jstr "$b_e"),\"saw\":$(jstr "$b_s")}";;
+  mine) shift; a=""; while [[ $# -gt 0 ]]; do case "$1" in --agent) a="$2"; shift 2;; *) a="$1"; shift;; esac; done
+        [[ -n "$a" ]] || { echo "bus mine --agent YOU" >&2; exit 2; }; cmd_card list --agent "$a";;
+  seat) shift; [[ "${1:-}" == "swap" && -n "${2:-}" && -n "${3:-}" ]] || { echo "bus seat swap A B" >&2; exit 2; }
+        ss_post /api/seat/swap "{\"a\":$(jstr "$2"),\"b\":$(jstr "$3")}";;
+  freedcamp) shift; case "${1:-status}" in
+        sync|status) ss_post /api/freedcamp/sync "{}";;
+        *) echo "bus freedcamp sync   (pushes every card; needs ~/agent-bus/.freedcamp.json)" >&2; exit 2;; esac;;
+  ss) shift; cmd_ss "$@";;
+  fridge) shift; cmd_fridge "$@";;
+  snap) shift; cmd_snap "$@";;
+  lol) shift; cmd_lol "$@";;
+  office) shift; cmd_office "$@";;
+  invite) shift; cmd_invite "$@";;
+  race) shift; cmd_race "$@";;
+  brief) shift; cmd_brief "$@";;
+  welcome) shift; cmd_welcome "$@";;
+  tunnel) shift; cmd_tunnel "$@";;
+  spend) shift; cmd_spend "$@";;
+  cap) shift; cmd_cap "$@";;
+  shift) shift; cmd_shift "$@";;
+  help|-h|--help|"") usage;;
+  *) echo "unknown subcommand: $1" >&2; usage; exit 2;;
+esac

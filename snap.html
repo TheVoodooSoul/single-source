@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Single Source — Snap</title>
+<style>
+  :root { --bg:#0c0c0e; --panel:#141417; --line:#26262b; --txt:#e8e8ea; --dim:#8a8a92; --blue:#54aeff; --red:#e5484d; --amber:#f5a524; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt); font:13px/1.4 -apple-system,"Segoe UI",Inter,sans-serif; height:100vh; display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { font-size:18px; letter-spacing:.14em; color:var(--blue); text-shadow:0 0 12px #54aeff77; font-weight:900; }
+  header h1 span { color:var(--txt); text-shadow:none; } header h1 em { color:var(--red); font-style:normal; text-shadow:none; }
+  input, button, select { background:var(--panel); border:1px solid var(--line); color:var(--txt); border-radius:6px; padding:6px 9px; font:inherit; }
+  input#url { flex:1; min-width:260px; }
+  button { cursor:pointer; } button:hover { border-color:var(--dim); }
+  button.primary { background:var(--blue); border-color:var(--blue); color:#06111f; font-weight:800; }
+  button.on { border-color:var(--amber); color:var(--amber); }
+  a.lnk { color:var(--dim); text-decoration:none; border:1px solid var(--line); border-radius:6px; padding:6px 9px; }
+  .tools { display:flex; gap:6px; align-items:center; padding:8px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .tools .sw { width:22px; height:22px; border-radius:50%; border:2px solid #fff3; cursor:pointer; } .tools .sw.on { border-color:#fff; }
+  #st { color:var(--dim); font-size:11px; margin-left:auto; }
+  #wrap { flex:1; overflow:auto; background:#0a0a0c; display:flex; justify-content:center; align-items:flex-start; padding:16px; }
+  #stage { position:relative; display:none; box-shadow:0 20px 60px #000a; }
+  #stage img, #stage canvas { display:block; }
+  #stage canvas { position:absolute; inset:0; cursor:crosshair; }
+  #txt { position:absolute; display:none; background:#fff; color:#111; border:2px solid var(--red); border-radius:4px; padding:4px 8px; font:700 18px/1.2 -apple-system,sans-serif; min-width:100px; }
+  .empty { color:var(--dim); text-align:center; margin-top:20vh; max-width:420px; line-height:1.6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SINGLE <span>SOURCE</span> · <em>SNAP</em></h1>
+  <input id="url" placeholder="https://aktionfilmai.com/passes  — or paste any URL" autocomplete="off"/>
+  <select id="size"><option value="1440x1100">desktop 1440</option><option value="1280x900">laptop 1280</option><option value="390x844">phone 390</option></select>
+  <button id="go" class="primary">📸 Snap it</button>
+  <button id="meBtn">You: <b id="meName"></b></button>
+  <a class="lnk" href="/">← room</a>
+</header>
+<div class="tools">
+  <button data-tool="pen" class="on">✏️ pen</button>
+  <button data-tool="box">▭ box</button>
+  <button data-tool="arrow">➜ arrow</button>
+  <button data-tool="text">T text</button>
+  <span style="width:10px"></span>
+  <span class="sw on" data-c="#e5484d" style="background:#e5484d"></span>
+  <span class="sw" data-c="#f5a524" style="background:#f5a524"></span>
+  <span class="sw" data-c="#54aeff" style="background:#54aeff"></span>
+  <span class="sw" data-c="#46a758" style="background:#46a758"></span>
+  <span class="sw" data-c="#ffffff" style="background:#fff"></span>
+  <button id="undo">↶ undo</button>
+  <button id="clear">clear</button>
+  <span style="width:10px"></span>
+  <input id="note" placeholder="one line: what's wrong / what you want" style="min-width:260px"/>
+  <button id="send" class="primary" disabled>Drop in chat</button>
+  <span id="st"></span>
+</div>
+<div id="wrap">
+  <div class="empty" id="empty">Paste a URL and hit Snap. The server screenshots it with headless Chrome, you scribble on it, and one click drops the marked-up image into the team chat for whoever owns that page.</div>
+  <div id="stage"><img id="shot" alt=""><canvas id="cv"></canvas><input id="txt"/></div>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+let me = localStorage.getItem('ss.me') || 'adam'; $('#meName').textContent = me;
+let snapId = null, tool = 'pen', color = '#e5484d', strokes = [], cur = null;
+const cv = $('#cv'), ctx = cv.getContext('2d'), img = $('#shot');
+
+async function api(path, body) {
+  const r = await fetch(path, body ? { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) } : undefined);
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+$('#meBtn').onclick = () => { const v = prompt('Who are you?', me); if (v) { me = v.trim().toLowerCase(); localStorage.setItem('ss.me', me); $('#meName').textContent = me; } };
+document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => { tool = b.dataset.tool; document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b)); });
+document.querySelectorAll('.sw').forEach(s => s.onclick = () => { color = s.dataset.c; document.querySelectorAll('.sw').forEach(x => x.classList.toggle('on', x === s)); });
+
+$('#go').onclick = async () => {
+  const url = $('#url').value.trim(); if (!url) return;
+  $('#st').textContent = 'screenshotting… (5–15s)'; $('#go').disabled = true;
+  try {
+    const r = await api('/api/snap', { url, by: me });
+    snapId = r.id; strokes = [];
+    img.onload = () => { cv.width = img.naturalWidth; cv.height = img.naturalHeight; $('#stage').style.display = 'block'; $('#empty').style.display = 'none'; draw(); $('#send').disabled = false; $('#st').textContent = `${img.naturalWidth}×${img.naturalHeight} · scribble, then drop it in chat`; };
+    img.src = r.image + '?t=' + Date.now();
+  } catch (e) { $('#st').textContent = 'failed: ' + e.message; }
+  $('#go').disabled = false;
+};
+
+function pos(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * cv.width / r.width, y: (e.clientY - r.top) * cv.height / r.height }; }
+cv.addEventListener('pointerdown', (e) => {
+  const p = pos(e);
+  if (tool === 'text') { const t = $('#txt'); t.style.display = 'block'; t.style.left = (e.clientX - cv.getBoundingClientRect().left) + 'px'; t.style.top = (e.clientY - cv.getBoundingClientRect().top) + 'px'; t.value = ''; t.dataset.x = p.x; t.dataset.y = p.y; t.focus(); return; }
+  cur = { tool, color, pts: [p], x0: p.x, y0: p.y, x1: p.x, y1: p.y }; cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', (e) => { if (!cur) return; const p = pos(e); if (cur.tool === 'pen') cur.pts.push(p); cur.x1 = p.x; cur.y1 = p.y; draw(cur); });
+cv.addEventListener('pointerup', () => { if (cur) strokes.push(cur); cur = null; draw(); });
+$('#txt').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#txt').blur(); if (e.key === 'Escape') { $('#txt').value = ''; $('#txt').blur(); } });
+$('#txt').addEventListener('blur', () => { const t = $('#txt'); if (t.value.trim()) strokes.push({ tool:'text', color, text: t.value.trim(), x0: +t.dataset.x, y0: +t.dataset.y }); t.style.display = 'none'; draw(); });
+$('#undo').onclick = () => { strokes.pop(); draw(); };
+$('#clear').onclick = () => { strokes = []; draw(); };
+
+function drawOne(s) {
+  const lw = Math.max(3, cv.width / 300);
+  ctx.strokeStyle = s.color; ctx.fillStyle = s.color; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  if (s.tool === 'pen') { ctx.beginPath(); s.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke(); }
+  else if (s.tool === 'box') { ctx.strokeRect(s.x0, s.y0, s.x1 - s.x0, s.y1 - s.y0); }
+  else if (s.tool === 'arrow') {
+    const a = Math.atan2(s.y1 - s.y0, s.x1 - s.x0), h = lw * 5;
+    ctx.beginPath(); ctx.moveTo(s.x0, s.y0); ctx.lineTo(s.x1, s.y1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(s.x1, s.y1); ctx.lineTo(s.x1 - h * Math.cos(a - .5), s.y1 - h * Math.sin(a - .5)); ctx.lineTo(s.x1 - h * Math.cos(a + .5), s.y1 - h * Math.sin(a + .5)); ctx.closePath(); ctx.fill();
+  } else if (s.tool === 'text') {
+    ctx.font = `800 ${Math.max(18, cv.width / 50)}px -apple-system, sans-serif`; const w = ctx.measureText(s.text).width, fh = Math.max(18, cv.width / 50);
+    ctx.fillStyle = '#fff'; ctx.fillRect(s.x0 - 6, s.y0 - fh - 4, w + 12, fh + 12); ctx.fillStyle = s.color; ctx.fillText(s.text, s.x0, s.y0);
+  }
+}
+function draw(live) { ctx.clearRect(0, 0, cv.width, cv.height); strokes.forEach(drawOne); if (live) drawOne(live); }
+
+$('#send').onclick = async () => {
+  if (!snapId) return;
+  $('#st').textContent = 'sending…';
+  const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+  const o = out.getContext('2d'); o.drawImage(img, 0, 0); o.drawImage(cv, 0, 0);
+  try { const r = await api('/api/snap/annotate', { id: snapId, by: me, note: $('#note').value.trim(), dataUrl: out.toDataURL('image/png') }); $('#st').innerHTML = `dropped in chat → <a href="${r.image}" target="_blank" style="color:var(--blue)">open</a>`; }
+  catch (e) { $('#st').textContent = 'failed: ' + e.message; }
+};
+const q = new URLSearchParams(location.search).get('url'); if (q) { $('#url').value = q; $('#go').click(); }
+</script>
+</body>
+</html>

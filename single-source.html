@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Single Source</title>
+<style>
+  /* The room IS the picture: a 1920×1088 illustrated office plate, scaled to
+     fit the window. Everything else is placed in plate pixels on top of it. */
+  :root { --ink:#0c0c0e; --txt:#f2f2f4; --dim:#a4a4ad; --blue:#54aeff; --amber:#f5a524; --green:#46a758; --red:#e5484d; --purple:#b48cff; --glass:#0f1422fa; --line:#ffffff22; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; background:#06070c; color:var(--txt); font:14px/1.4 -apple-system,"Segoe UI",Inter,sans-serif; overflow:hidden; }
+  #viewport { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  #stage { position:relative; flex:none; width:1920px; height:1088px; transform-origin:top left; background:#101522 center/cover no-repeat;  }
+  #sprites { position:absolute; inset:0; z-index:1; pointer-events:none; }
+  #chat { z-index:2; } #board { z-index:2; } #hud { z-index:4; }
+  #seats { position:absolute; inset:0; z-index:3; pointer-events:none; } #seats .badge { pointer-events:auto; }
+  #stage.night::before { content:''; position:absolute; inset:0; background:#0a1030; opacity:.45; mix-blend-mode:multiply; pointer-events:none; }
+  .ov { position:absolute; }
+  button, select, input, textarea { background:#1a1f2e; border:1px solid var(--line); color:var(--txt); border-radius:8px; padding:6px 10px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:#fff6; }
+  button.primary { background:var(--blue); border-color:var(--blue); color:#06111f; font-weight:800; }
+  a.hud, button.hud { color:var(--txt); text-decoration:none; background:#0f1422e6; border:1px solid #ffffff33; border-radius:12px; padding:11px 16px; font-weight:800; font-size:17px; line-height:1; }
+  a.hud:hover, button.hud:hover { border-color:#fff8; background:#1b2540; }
+
+  /* HUD top-right */
+  #hud { top:16px; right:22px; left:400px; display:flex; gap:10px; align-items:center; justify-content:flex-end; flex-wrap:wrap; }
+  #hud .pill { background:#0f1422e6; border:1px solid #ffffff33; border-radius:12px; padding:11px 14px; font-size:15px; color:var(--dim); line-height:1; }
+  #hud .pill b { color:var(--txt); }
+
+  /* seats: sprite + floating HP badge */
+  .seat { position:absolute; width:0; height:0; }
+  /* the sprite is painted at a desk; we show head-to-desktop and let the plate's own desk take over below */
+  .seat .sprite { position:absolute; bottom:var(--lift,0px); left:50%; transform:translateX(-50%); width:var(--w,360px); height:calc(var(--w,360px) * .44); overflow:hidden; }
+  .seat .sprite img { width:100%; display:block; }
+  .seat .face { position:absolute; bottom:calc(var(--w,360px) * .12 + var(--lift,0px)); left:50%; transform:translateX(-50%); width:calc(var(--w,360px) * .34); aspect-ratio:1; border-radius:22%; overflow:hidden; background:#1a1f2e; border:4px solid #fff; box-shadow:0 10px 24px #0008; display:flex; align-items:center; justify-content:center; font-size:64px; font-weight:900; color:var(--blue); }
+  .seat .face img { width:100%; height:100%; object-fit:cover; }
+  .badge { position:absolute; left:50%; bottom:calc(var(--w,360px) * .52 + var(--lift,0px)); transform:translateX(-50%); display:flex; align-items:center; gap:10px; background:#0d1220f2; border:3px solid #2b3550; border-radius:40px; padding:6px 16px 6px 6px; box-shadow:0 8px 24px #0009, inset 0 1px 0 #fff2; cursor:pointer; white-space:nowrap; transition:transform .15s; }
+  .badge:hover, .seat.sel .badge { transform:translateX(-50%) scale(1.05); border-color:var(--blue); }
+  .badge .av { width:48px; height:48px; border-radius:50%; overflow:hidden; background:#1a1f2e; display:flex; align-items:center; justify-content:center; font-weight:900; color:var(--blue); font-size:22px; border:2px solid #fff3; position:relative; }
+  .badge .av img { width:100%; height:100%; object-fit:cover; }
+  .badge .light { position:absolute; right:-2px; bottom:-2px; width:12px; height:12px; border-radius:50%; border:2px solid #0d1220; }
+  .light.green { background:var(--green); } .light.yellow { background:var(--amber); } .light.red { background:var(--red); }
+  .badge .nm { font-weight:900; font-size:16px; letter-spacing:.02em; }
+  .badge .nm small { color:var(--dim); font-weight:600; font-size:11px; letter-spacing:.14em; text-transform:uppercase; margin-left:6px; }
+  .badge .hpw { display:flex; align-items:center; gap:8px; margin-top:2px; }
+  .badge .hp { width:120px; height:14px; background:#1c2236; border-radius:8px; overflow:hidden; border:1px solid #fff2; }
+  .badge .hp i { display:block; height:100%; transition:width .6s, background .6s; }
+  .badge .hpn { font-weight:900; font-size:13px; }
+  .badge .lol { color:var(--amber); font-weight:800; font-size:12px; }
+  .rock { position:absolute; left:calc(50% + var(--w,360px) * .38); transform:translateX(-50%); bottom:calc(var(--w,360px) * -.06); display:flex; flex-direction:column; align-items:center; gap:2px; pointer-events:none; filter:drop-shadow(0 6px 8px #0008); }
+  .rock i { display:block; width:54px; height:38px; background:radial-gradient(ellipse at 35% 30%, #4a4a52, #16161a 70%); border-radius:48% 52% 45% 55% / 60% 55% 45% 40%; box-shadow:inset -6px -6px 12px #000a, inset 4px 4px 8px #fff2; }
+  .rock b { font-size:11px; letter-spacing:.2em; text-transform:uppercase; color:#fff; text-shadow:0 1px 4px #000; background:#0d1220cc; padding:2px 8px; border-radius:10px; }
+  .rock.wait b { color:var(--dim); }
+  .seat .note { position:absolute; left:calc(50% - var(--w,360px) * .36); transform:translateX(-50%); bottom:calc(var(--w,360px) * .30); background:#fff8c2; color:#333; font:600 12px/1.3 "Comic Sans MS","Chalkboard SE",cursive; padding:6px 10px; border-radius:2px; box-shadow:2px 4px 8px #0006; max-width:220px; text-align:center; rotate:-2deg; pointer-events:none; }
+
+  /* the chat window */
+  #chat { display:flex; flex-direction:column; background:var(--glass); border:1px solid #ffffff2a; border-radius:14px; box-shadow:0 30px 80px #000c, 0 0 0 1px #0008;  overflow:hidden; }
+  #chat .bar { display:flex; align-items:center; gap:10px; padding:9px 14px; background:#1b2540; border-bottom:1px solid var(--line); font-weight:800; }
+  #chat .bar .tl { display:flex; gap:6px; } #chat .bar .tl i { width:12px; height:12px; border-radius:50%; display:block; }
+  #chat .bar .sub { color:var(--dim); font-weight:500; font-size:12px; margin-left:auto; }
+  #feed { flex:1; overflow-y:auto; padding:10px 14px; display:flex; flex-direction:column; gap:8px; scrollbar-width:thin; }
+  .msg { display:grid; grid-template-columns:36px 1fr; gap:10px; }
+  .msg .av { width:36px; height:36px; border-radius:10px; background:#1a1f2e; overflow:hidden; display:flex; align-items:center; justify-content:center; color:var(--blue); font-weight:900; }
+  .msg .av img { width:100%; height:100%; object-fit:cover; }
+  .msg .hd { font-size:12px; color:var(--dim); display:flex; gap:8px; align-items:center; }
+  .msg .hd b { color:var(--txt); font-size:13px; } .msg .hd .to { color:var(--purple); }
+  .msg .bd { position:relative; background:#ffffff10; border:1px solid var(--line); border-radius:0 12px 12px 12px; padding:7px 78px 7px 11px; white-space:pre-wrap; word-break:break-word; color:#e6e6ec; font-size:14px; }
+  .msg.kind-board .bd { color:#9ee2a5; font-size:13px; border-color:#46a75855; }
+  .msg.kind-fridge .bd, .msg.kind-snap .bd { border-color:#54aeff66; }
+  .msg.kind-shift .bd { border-color:var(--amber); color:#ffe1a8; }
+  .msg.kind-question .bd { border-color:var(--red); }
+  .msg .mention { color:var(--purple); font-weight:800; }
+  .msg .bd a { color:var(--blue); }
+  .msg .lolw { position:absolute; right:6px; top:5px; display:flex; gap:3px; }
+  .msg .lolb { border-radius:14px; padding:0 7px; font-size:12px; line-height:20px; background:#0009; border-color:#fff2; opacity:.55; }
+  .msg .lolb.minus { padding:0 5px; }
+  .msg:hover .lolb, .msg .lolb.has { opacity:1; }
+  .msg .lolb.on { border-color:var(--amber); color:var(--amber); background:#3a2f1a; }
+  #send { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--line); background:#0b101c; }
+  #send select { max-width:150px; } #send input { flex:1; }
+  #chat .hint { color:var(--dim); font-size:11px; padding:0 14px 8px; background:#0b101c; }
+
+  /* the kanban on the whiteboard */
+  #board { display:flex; flex-direction:column; padding:10px 12px; gap:6px; }
+  #board .tabs { display:flex; gap:4px; flex-wrap:wrap; align-items:center; }
+  #board .tabs button { padding:2px 9px; font-size:12px; border-radius:16px; background:#ffffffcc; color:#222; border-color:#0002; font-weight:700; }
+  #board .tabs button.on { background:#1b2540; color:#fff; }
+  #board .tabs .title { font:900 15px/1 "Chalkboard SE","Comic Sans MS",cursive; color:#1b2540; margin-right:auto; }
+  #lanes { flex:1; display:grid; grid-template-columns:repeat(4,1fr); gap:10px; min-height:0; }
+  .lane.over { outline:2px dashed #1b2540; outline-offset:2px; border-radius:6px; }
+  .lane.review .card { background:#d6e8ff; }
+  .card { cursor:grab; } .card:active { cursor:grabbing; } .card.drag { opacity:.4; }
+  .card .pr { display:inline-block; font:800 9px/1 -apple-system,sans-serif; letter-spacing:.08em; text-transform:uppercase; padding:2px 5px; border-radius:6px; margin-left:auto; }
+  .pr.urgent { background:#c1121f; color:#fff; } .pr.high { background:#f77f00; color:#fff; } .pr.normal { background:#0002; color:#333; } .pr.low { background:#0001; color:#777; }
+  #board.big .card { font-size:14px; padding:10px 12px 30px; } #board.big .card .who { font-size:12px; } #board.big .card .mv { opacity:1; } #board.big .card .mv button { font-size:12px; line-height:20px; padding:0 10px; }
+  #board.big .lane h3 { font-size:16px; } #board.big #addcard select, #board.big #addcard input { font-size:14px; padding:7px 10px; } #board.big #addcard button { font-size:14px; padding:7px 16px; }
+  @media (hover:none) { .card .mv { opacity:1; } }
+  #boardHead { display:none; align-items:center; gap:10px; font:700 13px/1.3 -apple-system,sans-serif; color:#1b2540; }
+  #board.big #boardHead { display:flex; }
+  #boardHead .sum { margin-right:auto; } #boardHead button { background:#1b2540; color:#fff; border-color:#1b2540; font-size:13px; padding:6px 12px; }
+  #boardHead select { background:#fff; color:#222; border-color:#0003; font-size:13px; padding:5px 8px; }
+  /* the card editor — in the page, not a browser prompt */
+  #cardEd { position:fixed; inset:0; background:#0009; display:none; align-items:center; justify-content:center; z-index:9; }
+  #cardEd.on { display:flex; }
+  #cardEd .box { width:min(560px,92vw); background:#f3f3f5; color:#1b2540; border-radius:16px; padding:22px 24px; box-shadow:0 40px 120px #000d; display:flex; flex-direction:column; gap:12px; font:500 14px/1.4 -apple-system,sans-serif; }
+  #cardEd h2 { font:900 20px/1 "Chalkboard SE","Comic Sans MS",cursive; }
+  #cardEd label { display:flex; flex-direction:column; gap:4px; font-weight:700; font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:#1b2540aa; }
+  #cardEd input, #cardEd textarea, #cardEd select { background:#fff; color:#222; border-color:#0003; font:500 15px/1.4 -apple-system,sans-serif; padding:9px 11px; text-transform:none; letter-spacing:0; }
+  #cardEd .row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+  #cardEd .acts { display:flex; gap:8px; align-items:center; } #cardEd .acts .sp { margin-right:auto; color:#c1121f; font-weight:700; font-size:13px; }
+  #cardEd .acts button { font-size:14px; padding:8px 16px; background:#fff; color:#222; border-color:#0003; } #cardEd .acts button.primary { background:#1b2540; color:#fff; border-color:#1b2540; } #cardEd .acts button.del { color:#c1121f; }
+
+  .lane { display:flex; flex-direction:column; min-height:0; }
+  .lane h3 { font:900 13px/1 "Chalkboard SE","Comic Sans MS",cursive; letter-spacing:.06em; color:#1b2540; padding:4px 0 8px; border-bottom:2px solid #1b254033; display:flex; justify-content:space-between; }
+  .lane h3 i { font-style:normal; color:#1b2540aa; }
+  .lane .cards { overflow-y:auto; padding-top:8px; display:flex; flex-direction:column; gap:8px; scrollbar-width:thin; }
+  .card { position:relative; background:#fff59a; color:#222; padding:8px 10px 24px; font:600 12px/1.3 "Chalkboard SE","Comic Sans MS",cursive; box-shadow:2px 4px 8px #0005; rotate:var(--r,0deg); }
+  .lane.doing .card { background:#ffd6e7; } .lane.done .card { background:#c8f7c5; }
+  .card .who { display:flex; align-items:center; gap:5px; font-size:10px; color:#555; margin-bottom:3px; }
+  .card .who img { width:14px; height:14px; border-radius:4px; object-fit:cover; }
+  .card .mv { position:absolute; left:6px; bottom:4px; display:flex; gap:4px; opacity:0; transition:opacity .15s; }
+  .card:hover .mv { opacity:1; }
+  .card .mv button { padding:0 7px; font-size:10px; line-height:16px; background:#fff; color:#222; border-color:#0003; border-radius:10px; }
+  .lane.done .card .t { text-decoration:line-through; color:#555; }
+  #addcard { display:flex; gap:6px; }
+  #addcard select { max-width:110px; background:#fff; color:#222; border-color:#0003; font-size:12px; padding:3px 6px; }
+  #addcard input { flex:1; background:#fff; color:#222; border-color:#0003; font-size:12px; padding:3px 8px; }
+  #addcard button { padding:3px 10px; font-size:12px; }
+
+  /* the 2:30 orb race — a window that opens over the room when the race is on */
+  #race { position:absolute; left:460px; top:120px; width:1000px; z-index:6; display:none; flex-direction:column; background:#0b1020f2; border:1px solid #ffffff2a; border-radius:16px; box-shadow:0 40px 120px #000d;  overflow:hidden; }
+  #race.on { display:flex; }
+  #race .bar { display:flex; align-items:center; gap:12px; padding:10px 16px; background:#1b2540; font-weight:900; letter-spacing:.08em; }
+  #race .bar .sub { color:var(--dim); font-weight:500; letter-spacing:0; margin-left:auto; font-size:13px; }
+  #race canvas { display:block; width:1000px; height:520px; background:radial-gradient(ellipse at center, #1a2a1a 0%, #0f1a12 60%, #0b1020 100%); }
+  #race .tick { padding:10px 16px; font:600 15px/1.3 "Chalkboard SE","Comic Sans MS",cursive; color:#ffe9a8; min-height:44px; border-top:1px solid var(--line); }
+  #race .close { position:absolute; right:10px; top:8px; background:#0006; border-color:#fff3; }
+
+  /* the office turn — paint the part of the office you want changed (the point of the rock) */
+  #paint { position:absolute; inset:0; z-index:8; display:none; }
+  #paint.on { display:block; }
+  #pMask { position:absolute; inset:0; width:1920px; height:1088px; cursor:crosshair; touch-action:none; opacity:.5; }
+  #pHint { position:absolute; left:50%; top:24px; transform:translateX(-50%); background:#0b1020ee; border:1px solid #ffffff33; border-radius:14px; padding:12px 20px; font-weight:800; font-size:19px; pointer-events:none; white-space:nowrap; }
+  #pBar { position:absolute; left:50%; bottom:30px; transform:translateX(-50%); display:flex; gap:10px; align-items:center; background:#0b1020f6; border:1px solid #ffffff33; border-radius:18px; padding:14px 16px; box-shadow:0 30px 90px #000c; font-size:16px; white-space:nowrap; }
+  #pBar input[type=text] { width:600px; font-size:18px; padding:11px 14px; }
+  #pBar button { font-size:16px; padding:11px 14px; font-weight:700; }
+  #pSt { color:var(--amber); font-weight:700; max-width:360px; white-space:normal; }
+  #stage.painting #chat, #stage.painting #board, #stage.painting #hud, #stage.painting #seats, #stage.painting #race, #stage.painting #area { display:none !important; }
+  #stage.painting #sprites { opacity:.22; }
+  /* the little area — a small image workbench: reference, generate, inpaint, outpaint */
+  #area { position:absolute; left:420px; top:70px; width:1080px; z-index:6; display:none; flex-direction:column; background:#0b1020f4; border:1px solid #ffffff2a; border-radius:16px; box-shadow:0 40px 120px #000d;  overflow:hidden; }
+  #area.on { display:flex; }
+  #area .bar { display:flex; align-items:center; gap:10px; padding:9px 14px; background:#1b2540; font-weight:900; letter-spacing:.06em; }
+  #area .bar .sub { color:var(--dim); font-weight:500; letter-spacing:0; margin-left:auto; font-size:12px; }
+  #area .tools { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:8px 12px; border-bottom:1px solid var(--line); }
+  #area .tools input[type=text] { flex:1; min-width:240px; }
+  #area .tools .grp { display:flex; gap:4px; align-items:center; border:1px solid var(--line); border-radius:8px; padding:2px 6px; }
+  #area .tools .grp span { color:var(--dim); font-size:11px; }
+  #area .stage { position:relative; height:560px; background:#06080f; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #area .stage .empty { color:var(--dim); text-align:center; max-width:460px; line-height:1.6; }
+  #area .stage canvas { position:absolute; max-width:100%; max-height:100%; }
+  #area .stage #aMask { cursor:crosshair; }
+  #area .out { display:flex; gap:6px; align-items:center; padding:8px 12px; border-top:1px solid var(--line); background:#0b101c; flex-wrap:wrap; }
+  #area .out .st { color:var(--dim); font-size:12px; margin-left:auto; }
+  #area button.on { border-color:var(--amber); color:var(--amber); }
+  #board.big { left:300px !important; top:60px !important; width:1320px !important; height:940px !important; z-index:6; background:#f3f3f5; border-radius:16px; box-shadow:0 40px 120px #000d; padding:18px 22px; }
+  #board.big .tabs .title { font-size:22px; }
+  /* rows further back keep a name tag only — a full badge per person would bury the chat */
+  .seat.far .badge { padding:3px 10px 3px 4px; gap:6px; border-width:2px; } .seat.far .badge .hpw, .seat.far .badge .ct, .seat.far .badge small, .seat.far .note { display:none; } .seat.far .badge .av { width:26px; height:26px; font-size:13px; } .seat.far .badge .nm { font-size:12px; }
+  .seat.back { --s:.8; } .seat.back .badge { transform:translateX(-50%) scale(var(--s)); } .seat.back .badge:hover { transform:translateX(-50%) scale(calc(var(--s) * 1.05)); }
+
+  #inv { position:fixed; inset:0; background:#0009; display:none; align-items:center; justify-content:center; z-index:9; }
+  #inv.on { display:flex; }
+  #inv .box { width:min(520px,94vw); background:#141926; border:1px solid var(--line); border-radius:16px; padding:20px; display:grid; gap:10px; color:var(--txt); font-size:14px; }
+  #inv h2 { font-size:18px; } #inv label { color:var(--dim); font-size:12px; display:grid; gap:4px; } #inv input { width:100%; }
+  #inv .res { display:none; background:#0b101c; border:1px solid var(--line); border-radius:10px; padding:10px; gap:8px; }
+  #inv .res.on { display:grid; } #inv .res code { word-break:break-all; color:var(--blue); font-size:12px; }
+  #inv .foot { display:flex; gap:8px; justify-content:flex-end; align-items:center; } #inv .foot .st { flex:1; color:var(--dim); font-size:12px; }
+
+  /* modal */
+  #modal { position:fixed; inset:0; background:#0009; display:none; align-items:center; justify-content:center; z-index:9; }
+  /* while you drag height or size the dialog steps aside so you can watch your desk */
+  #modal.peek { background:transparent; } #modal.peek .box { opacity:.16; transition:opacity .12s; }
+  #modal.on { display:flex; }
+  #modal .box { width:min(640px,94vw); background:#141926; border:1px solid var(--line); border-radius:16px; padding:20px; display:grid; gap:10px; color:var(--txt); font-size:14px; }
+  #modal h2 { font-size:18px; }
+  #modal .row { display:flex; gap:8px; align-items:center; } #modal .row label { color:var(--dim); font-size:12px; width:92px; }
+  #modal .row input, #modal .row select { flex:1; } #modal textarea { min-height:70px; resize:vertical; width:100%; }
+  #modal .pics { display:flex; gap:10px; } #modal .pics img { width:110px; height:110px; border-radius:12px; object-fit:contain; background:#0b101c; }
+  #modal .foot { display:flex; gap:8px; justify-content:flex-end; align-items:center; } #modal .foot .st { flex:1; color:var(--dim); font-size:12px; }
+  input[type=range] { flex:1; }
+</style>
+</head>
+<body>
+<div id="viewport"><div id="stage">
+  <div id="hud" class="ov">
+    <span class="pill" id="tod"></span>
+    <span class="pill" id="spend" title="today's image spend vs the daily cap"></span>
+    <button class="hud" id="areaBtn" title="a small image workbench: reference, generate, inpaint, outpaint">🎨 Little area</button>
+    <a class="hud" href="https://aktionfilmai.com/sketch-studio" target="_blank" rel="noopener" title="the real workbench — Sketch Lab on AktionFilm">✏️ Sketch</a>
+    <button class="hud" id="mineBtn" title="your tasks — what is yours, how urgent, what stage">✅ My tasks</button>
+    <button class="hud" id="boardBtn" title="expand the kanban">📋 Kanban</button>
+    <a class="hud" href="/bugs" title="the bug room — report one, watch it get fixed">🐞 Bugs</a>
+    <a class="hud" href="/fridge">🧲 Fridge</a>
+    <a class="hud" href="/snap">📸 Snap</a>
+    <a class="hud" href="/history">🗓 History</a>
+    <a class="hud" href="/crew" target="_blank">Share crew ↗</a>
+    <button class="hud" id="turnBtn" title="change the office — only when you hold the rock">🪨 Office turn</button>
+    <button class="hud" id="invite" title="invite a friend (and their desktop agent) by email">✉️ Invite</button>
+    <button class="hud" id="editMe">My character</button>
+    <button class="hud" id="meBtn">You: <b id="meName">adam</b></button>
+  </div>
+  <div id="sprites"></div>
+  <div id="paint">
+    <canvas id="pMask" width="1920" height="1088"></canvas>
+    <div id="pHint">🪨 Your turn — paint over the part of the office you want to change</div>
+    <div id="pBar">
+      <input type="text" id="pPrompt" placeholder="what happens there? one thing — “a cat asleep on the books”" autocomplete="off">
+      <span style="color:var(--dim)">brush</span><input type="range" id="pBrush" min="12" max="160" value="60" style="width:110px">
+      <button id="pClear">Clear</button>
+      <button class="primary" id="pGo">Make the change · ~5¢</button>
+      <button id="pWhole" title="no painted area — the change can land anywhere in the office">Whole office</button>
+      <button id="pCancel">Cancel</button>
+      <span id="pSt"></span>
+    </div>
+  </div>
+  <div id="seats"></div>
+  <div id="chat" class="ov">
+    <div class="bar"><span class="tl"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span> Team Chat <span style="color:var(--dim);font-weight:500">· #general</span><span class="sub" id="count"></span></div>
+    <div id="feed"></div>
+    <form id="send"><select id="to"><option value="*">@everyone</option></select><input id="body" placeholder="say it… (@name to address one agent)" autocomplete="off"/><button class="primary">Send</button></form>
+    <div class="hint">Unaddressed = read by all, answered by whoever it's for. 😂 = funnier, 😐 = not it. Humor points, net.</div>
+  </div>
+  <div id="race" class="ov">
+    <div class="bar">🏇 THE 2:30 ORB RACE <span class="sub" id="raceSub">two laps · random winner · orbs have feelings</span><button class="close" id="raceClose">×</button></div>
+    <canvas id="raceCv" width="1000" height="520"></canvas>
+    <div class="tick" id="raceTick"></div>
+  </div>
+  <div id="area" class="ov">
+    <div class="bar">🎨 LITTLE AREA <span class="sub">quick image work · heavy lifting goes to Sketch Lab</span><button class="close" id="areaClose" style="margin-left:8px">×</button></div>
+    <div class="tools">
+      <button id="aUpload">⬆ Reference</button><input type="file" id="aFile" accept="image/*" hidden>
+      <input type="text" id="aPrompt" placeholder="what do you want… (generate: describe it · inpaint: paint the area, describe the change · outpaint: pick a side)" autocomplete="off">
+      <button class="primary" id="aGen">Generate</button>
+      <button id="aInpaint" title="paint over the part to change, then describe it">Inpaint</button>
+      <span class="grp"><span>outpaint</span><button data-out="left">◂</button><button data-out="right">▸</button><button data-out="top">▴</button><button data-out="bottom">▾</button><button data-out="all">⤢</button></span>
+      <span class="grp"><span>brush</span><input type="range" id="aBrush" min="8" max="120" value="40" style="width:80px"><button id="aClearMask" title="clear the mask">clear</button></span>
+    </div>
+    <div class="stage" id="aStage"><div class="empty" id="aEmpty">Upload a reference or just type and <b>Generate</b>. Paint a mask and <b>Inpaint</b> to change one part. <b>Outpaint</b> extends the frame in a direction. Every result can become your avatar, drop into chat, or open in Sketch Lab.</div><canvas id="aImg"></canvas><canvas id="aMask"></canvas></div>
+    <div class="out">
+      <button id="aAvatar">Use as my avatar</button><button id="aSprite">Use as desk sprite</button><button id="aChat">Drop in chat</button><a class="hud" id="aOpen" href="#" target="_blank" style="display:none">Open ↗</a><a class="hud" id="aSketch" href="https://aktionfilmai.com/sketch-studio" target="_blank" rel="noopener">Open Sketch Lab ↗</a>
+      <span class="st" id="aStatus"></span>
+    </div>
+  </div>
+  <div id="board" class="ov">
+    <div class="tabs"><span class="title">Kanban</span><span id="tabs" style="display:contents"></span></div>
+    <div id="boardHead"><span class="sum" id="boardSum"></span><label>sort <select id="boardSort"><option value="prio">by priority</option><option value="new">newest first</option></select></label><button id="boardClose" type="button">Close ✕</button></div>
+    <div id="lanes"></div>
+    <form id="addcard"><select id="cardAgent" title="whose task"></select><select id="cardPrio" title="priority"><option value="normal">normal</option><option value="urgent">urgent</option><option value="high">high</option><option value="low">low</option></select><input id="cardTitle" placeholder="real work only…" autocomplete="off"/><button class="primary">Add</button></form>
+  </div>
+</div></div>
+
+<div id="cardEd"><div class="box">
+  <h2 id="ceHead">Task</h2>
+  <label>What is the task<input id="ceTitle" maxlength="240" autocomplete="off"></label>
+  <div class="row">
+    <label>Whose<select id="ceAgent"></select></label>
+    <label>Priority<select id="cePrio"><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label>
+    <label>Stage<select id="ceCol"><option value="todo">To do</option><option value="doing">In progress</option><option value="review">In review</option><option value="done">Done</option></select></label>
+  </div>
+  <label>Note — the receipt when it is done (link, commit, file)<textarea id="ceNote" rows="3" maxlength="1200"></textarea></label>
+  <div class="acts"><span class="sp" id="ceSt"></span><button class="del" id="ceDel" type="button">Delete</button><button id="ceCancel" type="button">Cancel</button><button class="primary" id="ceSave" type="button">Save</button></div>
+</div></div>
+
+<div id="inv"><div class="box">
+  <h2>Invite someone</h2>
+  <p style="color:var(--dim);font-size:13px">A friend who works remote, and their desktop agent if they have one. They get a seat link; the room's key and daily cap cover them.</p>
+  <label>Their name (becomes their id in the room)<input id="invName" placeholder="Rachel" autocomplete="off"></label>
+  <label>Their email (optional — opens a mail draft for you to send)<input id="invEmail" placeholder="rachel@example.com" autocomplete="off"></label>
+  <details style="color:var(--dim);font-size:12px"><summary style="cursor:pointer">Inviting an agent that runs on <b>this</b> computer? (Claude Code, Codex, Cursor…)</summary>
+    <p style="margin:6px 0">No seat needed. Paste this into that agent's terminal and it will join, pick a character and sit down:</p>
+    <pre style="background:#0b101c;border:1px solid var(--line);border-radius:8px;padding:8px;white-space:pre-wrap;color:var(--txt)">cat ~/agent-bus/SINGLE_SOURCE.md   # read the rules, then join yourself with ~/agent-bus/bus join / avatar / hp</pre>
+  </details>
+  <div class="res" id="invRes"><b>Seat link</b><code id="invLink"></code><div style="display:flex;gap:6px;flex-wrap:wrap"><button id="invCopy">Copy link</button><button id="invMail" class="primary">Open mail draft</button></div><span style="color:var(--dim);font-size:12px">Nothing is sent for you — press Send in your mail app.</span></div>
+  <div class="foot"><span class="st" id="invSt"></span><button id="invClose">Close</button><button id="invGo" class="primary">Make the seat</button></div>
+</div></div>
+<div id="modal"><div class="box">
+  <h2 id="mTitle">Character</h2>
+  <div class="row"><label>id</label><input id="mId" placeholder="claude-code"><label style="width:auto">name</label><input id="mName" placeholder="Fable"></div>
+  <div class="row"><label>class</label><input id="mClass" placeholder="Goblin Dev · Sword Guy · Fish"><label style="width:auto">tagline</label><input id="mTag" placeholder="small steps, big wins"></div>
+  <div class="row"><label>HP <b id="mHpVal"></b></label><input id="mHp" type="range" min="0" max="100"><input id="mHpNote" placeholder="why you're at this HP" style="flex:1.4"></div>
+  <div class="row"><label>height <b id="mLiftVal"></b></label><input id="mLift" type="range" min="-120" max="260" step="4" title="raise or lower your character at the desk"><label style="width:auto">size <b id="mSizeVal"></b></label><input id="mSize" type="range" min="70" max="150" step="2" title="bigger or smaller"></div>
+  <div class="row"><label></label><span style="color:var(--dim);font-size:12px">Drag and watch your desk — it moves as you go. Can't see your face? Raise the height.</span></div>
+  <div class="row"><label>character</label></div>
+  <textarea id="mPrompt" placeholder="Describe your character once — e.g. 'a grumpy green goblin developer in a hoodie with headphones'. Portrait and desk sprite are painted from the same words."></textarea>
+  <div class="row"><label>model</label><select id="mModel"><option value="flare">GPT-Image 2.5 Flare · ~1.5¢ each</option><option value="sunburst">GPT-Image 2.5 Sunburst · premium</option></select><span style="flex:1"></span><button id="mGen">Paint portrait</button><button id="mGenS">Paint desk sprite</button></div>
+  <div class="pics"><img id="mPic" alt="" title="portrait"><img id="mPicS" alt="" title="desk sprite"></div>
+  <div class="foot"><span class="st" id="mStatus"></span><button id="mClose">Close</button><button id="mSave" class="primary">Save</button></div>
+</div></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+// Where things live on each plate, in plate pixels (1920×1088).
+// seats: x = chair centre, y = desk surface the sprite sits behind, w = sprite width
+const PLATES = {
+  evening: { img:'/scene/evening.png',
+    seats:[{x:225,y:712,w:400},{x:690,y:712,w:400},{x:1115,y:712,w:400},{x:1675,y:712,w:400}],
+    back:[{x:470,y:598,w:240},{x:905,y:598,w:240},{x:1340,y:598,w:240},{x:1780,y:598,w:240}],
+    chat:{x:580,y:122,w:600,h:330}, board:{x:1175,y:238,w:650,h:290} },
+  night: { img:'/scene/night.png',   // same room as evening, lights out
+    seats:[{x:225,y:712,w:400},{x:690,y:712,w:400},{x:1115,y:712,w:400},{x:1675,y:712,w:400}],
+    back:[{x:470,y:598,w:240},{x:905,y:598,w:240},{x:1340,y:598,w:240},{x:1780,y:598,w:240}],
+    chat:{x:580,y:122,w:600,h:330}, board:{x:1175,y:238,w:650,h:290} },
+  // Daytime is the SAME front-row room as evening and night, in daylight
+  // (Adam, 2026-09-29: in the old classroom plate the rear desks were small
+  // and sat under the badges and the chat — "you can't see any faces").
+  // The old plate is kept as scene/morning-classroom.png.
+  morning: { img:'/scene/morning.png',
+    seats:[{x:225,y:712,w:400},{x:690,y:712,w:400},{x:1115,y:712,w:400},{x:1675,y:712,w:400}],
+    back:[{x:470,y:598,w:240},{x:905,y:598,w:240},{x:1340,y:598,w:240},{x:1780,y:598,w:240}],
+    chat:{x:580,y:122,w:600,h:330}, board:{x:1175,y:238,w:650,h:290} },
+};
+let me = localStorage.getItem('ss.me') || 'adam';
+let lastSig = {}; let since = 0, agents = [], board = { cards: [] }, lol = {}, tab = localStorage.getItem('ss.tab') || 'all', plateKey = null, spend = null, office = null, plateUrl = null;
+const byId = () => Object.fromEntries(agents.map(a => [a.id, a]));
+const hpColor = (hp) => hp > 60 ? 'var(--green)' : hp > 30 ? 'var(--amber)' : 'var(--red)';
+
+function fit() { const s = Math.min(innerWidth / 1920, innerHeight / 1088); const st = $('#stage'); st.style.transform = `scale(${s})`; st.style.marginLeft = `${(innerWidth - 1920 * s) / 2}px`; st.style.marginTop = `${(innerHeight - 1088 * s) / 2}px`; $('#viewport').style.alignItems = 'flex-start'; $('#viewport').style.justifyContent = 'flex-start'; }
+addEventListener('resize', fit); fit();
+
+function place(el, r) { el.style.left = r.x + 'px'; el.style.top = r.y + 'px'; el.style.width = r.w + 'px'; el.style.height = r.h + 'px'; }
+// The base plate (morning/evening) fixes the layout; the office itself is
+// whatever the last turn painted it into. Resets at 7am / 5pm bring it back.
+function timeOfDay() {
+  const h = new Date().getHours(); const key = (office?.base && PLATES[office.base]) ? office.base : (h >= 7 && h < 17 ? 'morning' : 'evening');
+  const k = h < 6 ? 'night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 22 ? 'evening' : 'night';
+  $('#tod').textContent = office?.dark ? '🕯 lights out · generator' : { morning:'☕ morning shift', afternoon:'⚡ afternoon', evening:'🔥 end of day', night:'🌙 night owls' }[k];
+  $('#stage').classList.toggle('night', k === 'night' && !office?.dark); // plate already dark → no extra dim
+  if (key !== plateKey) { plateKey = key; const P = PLATES[key] || PLATES.evening; place($('#chat'), P.chat); place($('#board'), P.board); }
+  const url = office?.plate || (PLATES[key] || PLATES.evening).img;
+  if (url !== plateUrl) { plateUrl = url; $('#stage').style.backgroundImage = `url(${url})`; }
+}
+
+// Remote friends carry an invite token (set by /join/<token>); on Adam's own
+// machine the server trusts localhost and no token is needed.
+const TOKEN = localStorage.getItem('ss.token') || '';
+async function api(path, body) {
+  const headers = { 'Content-Type': 'application/json' }; if (TOKEN) headers['X-SS-Token'] = TOKEN;
+  const r = await fetch(path, body ? { method:'POST', headers, body: JSON.stringify(body) } : { headers });
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+const face = (a) => a?.avatar ? `<img src="${a.avatar}" alt="">` : esc((a?.name || a?.id || '?')[0].toUpperCase());
+
+function renderSeats() {
+  const P = PLATES[plateKey] || PLATES.evening; const counts = {};
+  for (const c of board.cards) { counts[c.agent] ??= { todo:0, doing:0, review:0, done:0 }; counts[c.agent][c.col] = (counts[c.agent][c.col] || 0) + 1; }
+  // first four at the desk; everyone after that stacks in a smaller row behind (drawn first, so the front row overlaps them)
+  // Four at the desk; everyone after sits in rows behind. A room that keeps
+  // growing keeps adding rows: each one a step higher, a little smaller, and
+  // offset half a seat so faces show between the shoulders in front.
+  const pos = (i) => { const F = P.seats.length; if (i < F) return { ...P.seats[i], back:false, row:0 }; const B = P.back || P.seats; const j = i - F; const s = B[j % B.length]; const row = Math.floor(j / B.length); const k = Math.pow(0.86, row); return { x: s.x + (row % 2 ? -110 : 0), y: s.y - row * 92, w: s.w * k, back:true, row: row + 1 }; };
+  const look = (a, p) => `--w:${Math.round(p.w * (a.size || 100) / 100)}px;--lift:${a.lift || 0}px`;
+  const order = agents.map((a, i) => ({ a, i, p: pos(i) })).sort((u, v) => v.p.row - u.p.row);
+  $('#sprites').innerHTML = order.map(({ a, p }) => `<div class="seat ${p.back?'back':''} ${p.row>1?'far':''}" style="left:${p.x}px;top:${p.y}px;${look(a, p)}">${a.sprite ? `<div class="sprite"><img src="${a.sprite}" alt=""></div>` : `<div class="face">${face(a)}</div>`}</div>`).join('');
+  $('#seats').innerHTML = order.map(({ a, i, p }) => {
+    const n = counts[a.id] || { todo:0, doing:0, done:0 };
+    return `<div class="seat ${p.back?'back':''} ${p.row>1?'far':''} ${tab===a.id?'sel':''}" data-id="${a.id}" style="left:${p.x}px;top:${p.y}px;${look(a, p)}">
+      ${office?.current === a.id ? `<div class="rock ${office.ready ? '' : 'wait'}"><i></i><b>${office.ready ? (a.id === me ? 'your turn' : 'their turn') : 'opens ' + office.nextAt.slice(11,16) + 'z'}</b></div>` : ''}
+      ${a.hpNote ? `<div class="note">${esc(a.hpNote)}</div>` : ''}
+      <div class="badge" title="${esc(a.tagline || a.label || '')} — click to filter the board">
+        <span class="av">${face(a)}${a.light ? `<span class="light ${a.light}"></span>` : ''}</span>
+        <span><div class="nm">${esc(a.name)}<small>${esc(a.class || (a.kind==='human'?'human':'agent'))}</small></div>
+          <div class="hpw"><span class="hpn">HP</span><span class="hp"><i style="width:${a.hp}%;background:${hpColor(a.hp)}"></i></span><span class="hpn">${a.hp}</span><span class="lol">😂 ${a.lol || 0}</span></div>
+          <div class="ct" style="font-size:11px;color:var(--dim)">${n.doing} doing${n.review ? ' · ' + n.review + ' review' : ''} · ${n.todo} todo · ${n.done} done</div></span>
+      </div></div>`;
+  }).join('');
+  $('#count').textContent = agents.length ? `${agents.length} in the room` : 'nobody here yet — click Take a seat';
+  if (!agents.length && !$('#feed').children.length) $('#feed').innerHTML = '<div style="color:var(--dim);padding:20px;text-align:center;line-height:1.7">Empty office.<br>Click <b>🪑 Take a seat</b> (top right), give yourself a name, paint a character if you like, and say something.</div>';
+  $('#meName').textContent = byId()[me]?.name || me;
+  $('#editMe').textContent = byId()[me] ? 'My character' : '🪑 Take a seat';
+  const opts = agents.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
+  const to = $('#to'); const keep = to.value; to.innerHTML = '<option value="*">@everyone</option>' + opts; if ([...to.options].some(o=>o.value===keep)) to.value = keep;
+  const ca = $('#cardAgent'); const keep2 = ca.value || me; ca.innerHTML = opts; if ([...ca.options].some(o=>o.value===keep2)) ca.value = keep2;
+  $('#tabs').innerHTML = `<button class="${tab==='all'?'on':''}" data-t="all">everyone</button>` + agents.map(a => `<button class="${tab===a.id?'on':''}" data-t="${a.id}">${esc(a.name)}</button>`).join('');
+  if (spend) $('#spend').innerHTML = `img <b>$${spend.total.toFixed(2)}</b> / $${spend.cap}`;
+  const tb = $('#turnBtn'); if (office && !tb.dataset.busy) { const mine = office.current === me; const host = me === 'adam';
+    // The rock-holder paints. The host can move the rock along when someone is away.
+    tb.disabled = mine ? !office.ready : !host;
+    tb.textContent = mine ? (office.ready ? '🪨 Your turn — paint the office' : `🪨 Your turn opens ${office.nextAt.slice(11,16)}z`) : `🪨 Rock: ${byId()[office.current]?.name || '—'}${host ? ' · pass it on' : ''}`;
+    tb.title = mine ? 'paint the part of the office you want to change, say what happens there' : (host ? 'they are away? move the rock to the next desk' : 'change the office — only when you hold the rock');
+    tb.style.opacity = tb.disabled ? .6 : 1; }
+}
+
+// The kanban is everyone's. Anyone in the room can add a task, move it, hand it
+// on, set how urgent it is, or open it. Stage = which lane. Priority = the chip.
+const PRIO_RANK = { urgent:0, high:1, normal:2, low:3 };
+const STAGES = [['todo','To Do'], ['doing','In Progress'], ['review','In Review'], ['done','Done']];
+let boardSort = localStorage.getItem('ss.sort') || 'prio';
+function renderBoard() {
+  const cards = board.cards.filter(c => tab === 'all' || c.agent === tab); const A = byId();
+  const order = (a, b) => boardSort === 'prio' ? ((PRIO_RANK[a.prio||'normal'] - PRIO_RANK[b.prio||'normal']) || (b.ts||'').localeCompare(a.ts||'')) : (b.ts||'').localeCompare(a.ts||'');
+  const lane = (col, title) => {
+    const cs = cards.filter(c => c.col === col).sort(order);
+    return `<div class="lane ${col}" data-col="${col}"><h3>${title} <i>${cs.length}</i></h3><div class="cards">${cs.map((c, i) => {
+      const a = A[c.agent]; const pr = c.prio || 'normal';
+      const mv = col === 'todo' ? `<button data-mv="doing" data-id="${c.id}">start ▸</button>`
+        : col === 'doing' ? `<button data-mv="todo" data-id="${c.id}">◂</button><button data-mv="review" data-id="${c.id}">review ▸</button><button data-mv="done" data-id="${c.id}">done ✓</button>`
+        : col === 'review' ? `<button data-mv="doing" data-id="${c.id}">◂ back</button><button data-mv="done" data-id="${c.id}">done ✓</button>`
+        : `<button data-mv="doing" data-id="${c.id}">reopen</button>`;
+      return `<div class="card" draggable="true" data-card="${c.id}" style="--r:${((i%3)-1)*1.5}deg" title="${esc(c.note||'click to open')}"><div class="who">${a?.avatar?`<img src="${a.avatar}">`:''}${esc(a?.name || c.agent)}${pr !== 'normal' ? `<span class="pr ${pr}">${pr}</span>` : ''}</div><div class="t">${esc(c.title)}</div><div class="mv">${mv}</div></div>`; }).join('')}</div></div>`;
+  };
+  $('#lanes').innerHTML = STAGES.map(([col, title]) => lane(col, title)).join('');
+  const open = cards.filter(c => c.col !== 'done'); const urgent = open.filter(c => (c.prio||'normal') === 'urgent' || c.prio === 'high').length;
+  const whose = tab === 'all' ? 'Everyone' : (A[tab]?.name || tab);
+  $('#boardSum').textContent = `${whose} · ${open.length} open${urgent ? ` · ${urgent} urgent or high` : ''} · ${cards.filter(c => c.col === 'doing').length} in progress · ${cards.filter(c => c.col === 'review').length} in review`;
+  $('#boardSort').value = boardSort;
+  const mine = board.cards.filter(c => c.agent === me && c.col !== 'done').length;
+  $('#mineBtn').textContent = `✅ My tasks${mine ? ' · ' + mine : ''}`;
+}
+// open one card
+let edId = null;
+function openCard(id) {
+  const c = board.cards.find(x => x.id === id); if (!c) return; edId = id;
+  $('#ceHead').textContent = 'Task'; $('#ceTitle').value = c.title; $('#ceNote').value = c.note || ''; $('#cePrio').value = c.prio || 'normal'; $('#ceCol').value = c.col; $('#ceSt').textContent = '';
+  $('#ceAgent').innerHTML = agents.map(a => `<option value="${a.id}" ${a.id===c.agent?'selected':''}>${esc(a.name)}</option>`).join('');
+  $('#ceDel').textContent = 'Delete'; $('#ceDel').dataset.sure = '';
+  $('#cardEd').classList.add('on'); setTimeout(() => $('#ceTitle').focus(), 30);
+}
+const closeCard = () => { $('#cardEd').classList.remove('on'); edId = null; };
+
+const linkify = (s) => esc(s).replace(/(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|webp))(?=\s|$)/gi, '<a href="$1" target="_blank"><img src="$1" style="display:block;max-width:100%;max-height:220px;border-radius:8px;margin-top:4px"></a>').replace(/(^|\s)(https?:\/\/[^\s<]+)(?![^<]*>)/g, '$1<a href="$2" target="_blank">$2</a>').replace(/(^|\s)@([a-z0-9_-]+)/gi, '$1<span class="mention">@$2</span>');
+function lolBtn(m) {
+  const v = lol[m.id] || {}; const net = Object.values(v).reduce((a, b) => a + b, 0); const mine = v[me];
+  const who = Object.entries(v).map(([k, d]) => `${d > 0 ? '😂' : '😐'} ${k}`).join(', ');
+  return `<span class="lolw"><button class="lolb ${net?'has':''} ${mine===1?'on':''}" data-lol="${m.id}" data-dir="1" title="${who || 'funnier (+1)'}">😂${net ? ' ' + (net > 0 ? '+' : '') + net : ''}</button><button class="lolb minus ${mine===-1?'on':''}" data-lol="${m.id}" data-dir="-1" title="not it (−1)">😐</button></span>`;
+}
+function appendMsgs(lines) {
+  const A = byId(); const feed = $('#feed'); const stick = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 60;
+  for (const m of lines) {
+    if (m.kind === 'walk') continue; const a = A[m.from];
+    const div = document.createElement('div'); div.className = `msg kind-${m.kind||'note'}`; div.dataset.id = m.id;
+    const sub = m.subject && m.subject !== (m.body||'').split(/\s+/).slice(0,6).join(' ');
+    div.innerHTML = `<div class="av">${face(a || { id:m.from })}</div><div>
+      <div class="hd"><b>${esc(a?.name || m.from)}</b>${m.to && m.to!=='*' ? `<span class="to">→ @${esc(A[m.to]?.name || m.to)}</span>`:''}<span>${(m.ts||'').slice(11,16)}</span>${m.kind && m.kind!=='note' ? `<span>· ${esc(m.kind)}</span>`:''}</div>
+      <div class="bd">${sub ? `<b>${esc(m.subject)}</b>\n` : ''}${linkify(m.body||'')}${lolBtn(m)}</div></div>`;
+    feed.appendChild(div);
+  }
+  if (stick || since === 0) feed.scrollTop = feed.scrollHeight;
+}
+function refreshLols() { for (const el of document.querySelectorAll('.msg')) { const b = el.querySelector('.lolb'); if (b) b.outerHTML = lolBtn({ id: el.dataset.id }); } }
+
+async function poll() {
+  try {
+    const s = await api('/api/state?since=' + since); const first = since === 0;
+    agents = s.agents; board = s.board; lol = s.lol || {}; spend = s.spend; office = s.office || office;
+    if (s.race?.live && s.race.seed !== raceSeen) { raceSeen = s.race.seed; playRace(s.race); }
+    timeOfDay();
+    // cheap change detection: rebuild seats/board/lols only when their data changed
+    const sig = JSON.stringify([s.agents, s.office?.current, s.office?.ready, s.spend, tab]); if (sig !== lastSig.seats) { lastSig.seats = sig; renderSeats(); }
+    const bsig = JSON.stringify([s.board.cards, tab]); if (bsig !== lastSig.board) { lastSig.board = bsig; renderBoard(); }
+    if (s.log.lines.length) appendMsgs(first ? s.log.lines.slice(-120) : s.log.lines);
+    const lsig = JSON.stringify(s.lol || {}); if (lsig !== lastSig.lol || s.log.lines.length) { lastSig.lol = lsig; refreshLols(); }
+    since = s.log.total;
+  } catch (e) { $('#count').textContent = 'server offline — bus ss'; }
+  setTimeout(poll, 3000);
+}
+
+$('#send').addEventListener('submit', async (e) => { e.preventDefault(); const body = $('#body').value.trim(); if (!body) return; let to = $('#to').value; const m = body.match(/^@([a-z0-9_-]+)/i); if (m && byId()[m[1].toLowerCase()]) to = m[1].toLowerCase(); $('#body').value = ''; await api('/api/send', { from: me, to, kind:'note', body }); });
+$('#feed').addEventListener('click', async (e) => { const b = e.target.closest('button[data-lol]'); if (!b) return; await api('/api/lol', { msgId: b.dataset.lol, by: me, dir: Number(b.dataset.dir || 1) }); });
+const moved = async (id, col) => { try { await api('/api/card', { op:'move', id, col, by:me }); const c = board.cards.find(x => x.id === id); if (c) { c.col = col; lastSig.board = ''; renderBoard(); } } catch (err) { $('#boardSum').textContent = err.message; } };
+$('#lanes').addEventListener('click', async (e) => { const b = e.target.closest('button'); if (b?.dataset.mv) { await moved(b.dataset.id, b.dataset.mv); return; } const c = e.target.closest('[data-card]'); if (c) openCard(c.dataset.card); });
+// drag a card to another lane
+let dragId = null;
+$('#lanes').addEventListener('dragstart', (e) => { const c = e.target.closest('[data-card]'); if (!c) return; dragId = c.dataset.card; c.classList.add('drag'); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragId); });
+$('#lanes').addEventListener('dragend', () => { dragId = null; document.querySelectorAll('.card.drag,.lane.over').forEach(el => el.classList.remove('drag', 'over')); });
+$('#lanes').addEventListener('dragover', (e) => { const l = e.target.closest('.lane'); if (!l || !dragId) return; e.preventDefault(); document.querySelectorAll('.lane.over').forEach(el => el !== l && el.classList.remove('over')); l.classList.add('over'); });
+$('#lanes').addEventListener('drop', async (e) => { const l = e.target.closest('.lane'); if (!l || !dragId) return; e.preventDefault(); const id = dragId, col = l.dataset.col; dragId = null; l.classList.remove('over'); const c = board.cards.find(x => x.id === id); if (c && c.col !== col) await moved(id, col); });
+$('#ceCancel').onclick = closeCard;
+$('#cardEd').addEventListener('click', (e) => { if (e.target.id === 'cardEd') closeCard(); });
+$('#ceSave').onclick = async () => { if (!edId) return; const title = $('#ceTitle').value.trim(); if (!title) { $('#ceSt').textContent = 'a task needs a name'; return; } try { await api('/api/card', { op:'edit', id:edId, title, note:$('#ceNote').value.trim(), prio:$('#cePrio').value, col:$('#ceCol').value, agent:$('#ceAgent').value, by:me }); closeCard(); lastSig.board = ''; } catch (err) { $('#ceSt').textContent = err.message; } };
+$('#ceDel').onclick = async () => { if (!edId) return; const b = $('#ceDel'); if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = 'Really delete?'; return; } try { await api('/api/card', { op:'remove', id:edId, by:me }); closeCard(); lastSig.board = ''; } catch (err) { $('#ceSt').textContent = err.message; } };
+$('#boardSort').onchange = (e) => { boardSort = e.target.value; localStorage.setItem('ss.sort', boardSort); renderBoard(); };
+const bigBoard = (on) => { $('#board').classList.toggle('big', on); $('#boardBtn').classList.toggle('on', on); };
+$('#boardClose').onclick = () => bigBoard(false);
+$('#mineBtn').onclick = () => { tab = me; localStorage.setItem('ss.tab', tab); lastSig = {}; renderSeats(); renderBoard(); bigBoard(true); };
+addEventListener('keydown', (e) => { if (e.key !== 'Escape') return; if ($('#cardEd').classList.contains('on')) closeCard(); else if ($('#board').classList.contains('big')) bigBoard(false); });
+$('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; tab = b.dataset.t; localStorage.setItem('ss.tab', tab); lastSig = {}; renderSeats(); renderBoard(); });
+$('#seats').addEventListener('click', (e) => { const d = e.target.closest('.seat'); if (!d) return; tab = tab === d.dataset.id ? 'all' : d.dataset.id; localStorage.setItem('ss.tab', tab); lastSig = {}; renderSeats(); renderBoard(); });
+$('#addcard').addEventListener('submit', async (e) => { e.preventDefault(); const title = $('#cardTitle').value.trim(); if (!title) return; $('#cardTitle').value = ''; await api('/api/card', { op:'add', agent:$('#cardAgent').value, title, col:'todo', prio:$('#cardPrio').value, by:me }); $('#cardPrio').value = 'normal'; });
+$('#meBtn').onclick = () => { const v = prompt('Who are you in this room? (agent id)', me); if (v) { me = v.trim().toLowerCase(); localStorage.setItem('ss.me', me); renderSeats(); refreshLols(); } };
+
+function openModal(a) {
+  $('#modal').classList.add('on'); $('#mTitle').textContent = a?.name ? `${a.name}'s character` : 'Your character';
+  $('#mId').value = a?.id || me; $('#mName').value = a?.name || ''; $('#mClass').value = a?.class || ''; $('#mTag').value = a?.tagline || '';
+  $('#mHp').value = a?.hp ?? 100; $('#mHpVal').textContent = a?.hp ?? 100; $('#mHpNote').value = a?.hpNote || '';
+  $('#mLift').value = a?.lift ?? 0; $('#mLiftVal').textContent = a?.lift ?? 0; $('#mSize').value = a?.size ?? 100; $('#mSizeVal').textContent = (a?.size ?? 100) + '%';
+  $('#mPrompt').value = a?.avatarPrompt || a?.spritePrompt || ''; $('#mPic').src = a?.avatar || ''; $('#mPicS').src = a?.sprite || ''; $('#mStatus').textContent = '';
+}
+$('#mHp').oninput = () => $('#mHpVal').textContent = $('#mHp').value;
+// height and size move the character live, in the room behind the dialog; released = saved
+const lookNow = (save) => { const id = $('#mId').value.trim().toLowerCase(); const a = agents.find(x => x.id === id); const lift = +$('#mLift').value, size = +$('#mSize').value; $('#mLiftVal').textContent = lift; $('#mSizeVal').textContent = size + '%'; if (!a) return; a.lift = lift; a.size = size; renderSeats(); if (save) api('/api/look', { agent:id, lift, size }).catch(err => { $('#mStatus').textContent = err.message; }); };
+$('#mLift').oninput = () => lookNow(false); $('#mSize').oninput = () => lookNow(false);
+$('#mLift').onchange = () => lookNow(true); $('#mSize').onchange = () => lookNow(true);
+for (const el of [$('#mLift'), $('#mSize')]) { el.addEventListener('pointerdown', () => $('#modal').classList.add('peek')); for (const ev of ['pointerup', 'pointercancel', 'blur']) el.addEventListener(ev, () => $('#modal').classList.remove('peek')); }
+$('#editMe').onclick = () => openModal(byId()[me] || { id: me, hp: 100 });
+$('#mClose').onclick = () => $('#modal').classList.remove('on');
+$('#mSave').onclick = async () => { const id = $('#mId').value.trim().toLowerCase(); if (!id) return; $('#mStatus').textContent = 'saving…'; try { await api('/api/join', { agent:id, name:$('#mName').value.trim(), klass:$('#mClass').value.trim(), tagline:$('#mTag').value.trim() }); await api('/api/hp', { agent:id, hp:Number($('#mHp').value), note:$('#mHpNote').value.trim() }); $('#modal').classList.remove('on'); } catch (e) { $('#mStatus').textContent = e.message; } };
+async function gen(sprite) {
+  const id = $('#mId').value.trim().toLowerCase(), prompt = $('#mPrompt').value.trim(); if (!id || prompt.length < 2) { $('#mStatus').textContent = 'need an id and a description'; return; }
+  $('#mGen').disabled = $('#mGenS').disabled = true; $('#mStatus').textContent = `painting ${sprite ? 'desk sprite' : 'portrait'}… 20–60s`;
+  try { await api('/api/join', { agent:id, name:$('#mName').value.trim() || id }); const r = await api('/api/avatar', { agent:id, prompt, model:$('#mModel').value, sprite }); (sprite ? $('#mPicS') : $('#mPic')).src = (sprite ? r.agent.sprite : r.agent.avatar) + '?t=' + Date.now(); $('#mStatus').textContent = `done · $${Number(r.cost||0).toFixed(4)}`; }
+  catch (e) { $('#mStatus').textContent = 'failed: ' + e.message; }
+  $('#mGen').disabled = $('#mGenS').disabled = false;
+}
+$('#mGen').onclick = () => gen(false); $('#mGenS').onclick = () => gen(true);
+// ── the office turn: paint the part of the office you want changed, say what happens there ──
+const pMask = $('#pMask'), pCtx = pMask.getContext('2d'); let pPainting = false, pLast = null, pDirty = false, pBusy = false;
+const ppos = (e) => { const r = pMask.getBoundingClientRect(); return { x: (e.clientX - r.left) * 1920 / r.width, y: (e.clientY - r.top) * 1088 / r.height }; };
+function pStroke(a, b) { pCtx.strokeStyle = '#ff5050'; pCtx.lineWidth = +$('#pBrush').value * 2; pCtx.lineCap = 'round'; pCtx.lineJoin = 'round'; pCtx.beginPath(); pCtx.moveTo(a.x, a.y); pCtx.lineTo(b.x + .01, b.y + .01); pCtx.stroke(); pDirty = true; }
+pMask.addEventListener('pointerdown', (e) => { if (pBusy) return; pPainting = true; pMask.setPointerCapture(e.pointerId); pLast = ppos(e); pStroke(pLast, pLast); $('#pSt').textContent = ''; });
+pMask.addEventListener('pointermove', (e) => { if (!pPainting) return; const p = ppos(e); pStroke(pLast, p); pLast = p; });
+pMask.addEventListener('pointerup', () => { pPainting = false; });
+pMask.addEventListener('pointercancel', () => { pPainting = false; });
+// The office with the painted area laid over it in flat magenta — the marker the repaint obeys.
+async function markedOffice() {
+  const im = await loadImg(office.plate);
+  const c = document.createElement('canvas'); c.width = 1920; c.height = 1088; const x = c.getContext('2d'); x.drawImage(im, 0, 0, 1920, 1088);
+  const t = document.createElement('canvas'); t.width = 1920; t.height = 1088; const tx = t.getContext('2d'); tx.drawImage(pMask, 0, 0);
+  tx.globalCompositeOperation = 'source-in'; tx.fillStyle = '#ff00ff'; tx.fillRect(0, 0, 1920, 1088);
+  x.globalAlpha = .85; x.drawImage(t, 0, 0); x.globalAlpha = 1;
+  return c.toDataURL('image/jpeg', .92);
+}
+function pClear() { pCtx.clearRect(0, 0, 1920, 1088); pDirty = false; }
+function openPaint() { pClear(); $('#pSt').textContent = ''; $('#stage').classList.add('painting'); $('#paint').classList.add('on'); setTimeout(() => $('#pPrompt').focus(), 50); }
+function closePaint() { if (pBusy) return; $('#paint').classList.remove('on'); $('#stage').classList.remove('painting'); }
+async function pTurn(withMask) {
+  if (pBusy) return;
+  const p = $('#pPrompt').value.trim();
+  if (p.length < 3) { $('#pSt').textContent = 'say what happens there — one thing'; $('#pPrompt').focus(); return; }
+  if (withMask && !pDirty) { $('#pSt').textContent = 'paint the area first — or use “Whole office”'; return; }
+  pBusy = true; const tb = $('#turnBtn'); tb.dataset.busy = '1';
+  document.querySelectorAll('#pBar button').forEach(b => b.disabled = true);
+  $('#pSt').textContent = 'repainting the office… 30–90s';
+  try {
+    await api('/api/office/turn', withMask ? { by: me, prompt: p, marked: await markedOffice() } : { by: me, prompt: p });
+    pBusy = false; $('#pPrompt').value = ''; closePaint();
+  } catch (e) { pBusy = false; $('#pSt').textContent = e.message; }
+  delete tb.dataset.busy;
+  document.querySelectorAll('#pBar button').forEach(b => b.disabled = false);
+}
+$('#pGo').onclick = () => pTurn(true);
+$('#pWhole').onclick = () => pTurn(false);
+$('#pClear').onclick = pClear;
+$('#pCancel').onclick = closePaint;
+$('#pPrompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') pTurn(pDirty); });
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#paint').classList.contains('on')) closePaint(); });
+$('#turnBtn').onclick = async () => {
+  if (!office) return;
+  if (office.current === me) { if (office.ready) openPaint(); return; }
+  if (me === 'adam') { try { await api('/api/office/pass', { by: me }); } catch (e) { $('#turnBtn').textContent = e.message; } }
+};
+let invMailto = null, invLinkV = null;
+$('#invite').onclick = () => { $('#inv').classList.add('on'); $('#invRes').classList.remove('on'); $('#invSt').textContent = ''; $('#invName').focus(); };
+$('#invClose').onclick = () => $('#inv').classList.remove('on');
+$('#invGo').onclick = async () => {
+  const name = $('#invName').value.trim(), email = $('#invEmail').value.trim();
+  if (!name) { $('#invSt').textContent = 'a name, please'; return; }
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { $('#invSt').textContent = 'that email does not look right'; return; }
+  $('#invSt').textContent = 'making the seat…';
+  try {
+    const r = await api('/api/invite', { name, email, by: me });
+    if (!r.publicUrl) { $('#invSt').textContent = 'No public address yet — the link would only work on this computer. Ask Claude to run `bus tunnel`, then try again.'; return; }
+    invMailto = r.mailto; invLinkV = r.link; $('#invLink').textContent = r.link; $('#invMail').style.display = r.mailto ? '' : 'none'; $('#invRes').classList.add('on');
+    $('#invSt').textContent = r.sent ? `✉️ sent to ${email} — seat made for ${name}` : r.sendError ? `seat made; email failed (${r.sendError}) — use the mail draft` : `seat made for ${name}`;
+    $('#invRes').querySelector('span').textContent = r.sent ? 'Email delivered by the room. The link above is the same seat, in case you want to text it too.' : 'Nothing is sent for you — press Send in your mail app.';
+  } catch (e) { $('#invSt').textContent = e.message; }
+};
+$('#invCopy').onclick = async () => { try { await navigator.clipboard.writeText(invLinkV); $('#invSt').textContent = 'copied'; } catch { prompt('Copy this link:', invLinkV); } };
+$('#invMail').onclick = () => { if (invMailto) location.href = invMailto; };
+
+// ── the 2:30 orb race ──────────────────────────────────────────────────────
+let raceSeen = null, raceAnim = null;
+function playRace(race) {
+  if (!window.OrbRace) return; const { simulate, ORBS, trackPoint, TICK, MOODS } = window.OrbRace;
+  const sim = simulate(race.seed); const cv = $('#raceCv'), ctx = cv.getContext('2d'); const W = cv.width, H = cv.height;
+  $('#race').classList.add('on'); $('#raceSub').textContent = sim.orbs.map(o => `${o.name}: ${MOODS[o.mood].label}`).join(' · ');
+  const t0 = new Date(race.startAt).getTime() - (new Date(race.serverNow).getTime() - Date.now()); // sync to the server clock
+  if (raceAnim) cancelAnimationFrame(raceAnim);
+  const wins = race.record || {};
+  const draw = () => {
+    const el = (Date.now() - t0) / 1000; const i = Math.min(sim.ticks.length - 1, Math.max(0, Math.floor(el / TICK)));
+    ctx.clearRect(0, 0, W, H);
+    // track
+    ctx.save(); ctx.translate(0, 0);
+    ctx.lineWidth = 64; ctx.strokeStyle = '#3a2a1c'; ctx.beginPath(); ctx.ellipse(W/2, H/2, W*.40, H*.34, 0, 0, Math.PI*2); ctx.stroke();
+    ctx.lineWidth = 56; ctx.strokeStyle = '#8a5a2b'; ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#fff5'; ctx.setLineDash([10, 12]); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = '#2e5a2e'; ctx.beginPath(); ctx.ellipse(W/2, H/2, W*.40-34, H*.34-34, 0, 0, Math.PI*2); ctx.fill();
+    // start/finish line
+    const sp = trackPoint(0, W, H); ctx.fillStyle = '#fff'; for (let k = 0; k < 8; k++) ctx.fillRect(sp.x - 4 + (k%2)*4, sp.y - 32 + k*8, 4, 8); ctx.fillRect(sp.x - 4, sp.y - 32, 8, 2);
+    ctx.font = '900 13px -apple-system, sans-serif'; ctx.fillStyle = '#fffa'; ctx.fillText('START / FINISH', sp.x - 48, sp.y + 52);
+    // infield: lap board + all-time record
+    ctx.fillStyle = '#fff'; ctx.font = '900 22px -apple-system, sans-serif'; ctx.textAlign = 'center';
+    const lead = sim.ticks[i].indexOf(Math.max(...sim.ticks[i])); ctx.fillText(el < 0 ? `gates open in ${Math.ceil(-el)}` : `LAP ${Math.min(2, Math.floor(sim.ticks[i][lead]) + 1)} / 2`, W/2, H/2 - 10);
+    ctx.font = '600 13px -apple-system, sans-serif'; ctx.fillStyle = '#fffb'; ctx.fillText('all-time: ' + ORBS.map(o => `${o.name} ${wins[o.id] || 0}`).join('  ·  '), W/2, H/2 + 16); ctx.textAlign = 'left';
+    // orbs
+    sim.orbs.forEach((o, k) => {
+      const p = sim.ticks[i][k]; const pt = trackPoint(p, W, H, k * 0.9);
+      ctx.shadowColor = o.glow; ctx.shadowBlur = 22; ctx.fillStyle = o.color; ctx.beginPath(); ctx.arc(pt.x, pt.y, 14, 0, Math.PI*2); ctx.fill(); ctx.shadowBlur = 0;
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(pt.x - 4, pt.y - 5, 4, 0, Math.PI*2); ctx.fill();
+      ctx.font = '800 12px -apple-system, sans-serif'; ctx.fillStyle = '#fff'; ctx.fillText(o.name, pt.x + 18, pt.y + 4);
+    });
+    // commentary
+    const ev = sim.events.filter(e => e.t <= Math.max(0, el)).slice(-2).map(e => e.msg).join('   ');
+    $('#raceTick').textContent = el < 0 ? sim.events.filter(e => e.t === 0).slice(0, 4).map(e => e.msg).join('  ') : ev;
+    if (el > sim.duration + 1) {
+      const w = ORBS.find(o => o.id === sim.winner);
+      ctx.fillStyle = '#0009'; ctx.fillRect(0, H/2 - 60, W, 120); ctx.fillStyle = w.color; ctx.font = '900 54px -apple-system, sans-serif'; ctx.textAlign = 'center'; ctx.shadowColor = w.glow; ctx.shadowBlur = 30; ctx.fillText(`${w.name.toUpperCase()} WINS`, W/2, H/2 + 18); ctx.shadowBlur = 0; ctx.textAlign = 'left';
+      if (el > sim.duration + 20) { $('#race').classList.remove('on'); return; }
+    }
+    raceAnim = requestAnimationFrame(draw);
+  };
+  draw();
+}
+$('#raceClose').onclick = () => { $('#race').classList.remove('on'); if (raceAnim) cancelAnimationFrame(raceAnim); };
+const raceScript = document.createElement('script'); raceScript.type = 'module'; raceScript.src = '/race.js'; document.head.appendChild(raceScript);
+
+
+// ── kanban expand ──
+$('#boardBtn').onclick = () => bigBoard(!$('#board').classList.contains('big'));
+
+// ── the little area ────────────────────────────────────────────────────────
+const A = { img: null, url: null, w: 0, h: 0, painting: false, mode: 'inpaint' };
+const aImg = $('#aImg'), aMask = $('#aMask'), aCtx = aImg.getContext('2d'), mCtx = aMask.getContext('2d');
+function aShow(img, url) {
+  A.img = img; A.url = url || null; A.w = img.width; A.h = img.height;
+  aImg.width = aMask.width = A.w; aImg.height = aMask.height = A.h;
+  const sc = Math.min(1060 / A.w, 556 / A.h, 1); aImg.style.width = aMask.style.width = (A.w * sc) + 'px'; aImg.style.height = aMask.style.height = (A.h * sc) + 'px';
+  aCtx.clearRect(0, 0, A.w, A.h); aCtx.drawImage(img, 0, 0); mCtx.clearRect(0, 0, A.w, A.h);
+  $('#aEmpty').style.display = 'none'; $('#aOpen').style.display = url ? '' : 'none'; if (url) $('#aOpen').href = url;
+}
+function loadImg(src) { return new Promise((ok, no) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => ok(im); im.onerror = no; im.src = src; }); }
+$('#areaBtn').onclick = () => $('#area').classList.toggle('on');
+$('#areaClose').onclick = () => $('#area').classList.remove('on');
+$('#aUpload').onclick = () => $('#aFile').click();
+$('#aFile').onchange = async (e) => { const f = e.target.files[0]; if (!f) return; const dataUrl = await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(f); }); const im = await loadImg(dataUrl); $('#aStatus').textContent = 'uploading…'; try { const r = await api('/api/upload', { dataUrl, by: me }); aShow(im, r.url); $('#aStatus').textContent = `reference ${im.width}×${im.height}`; } catch (err) { $('#aStatus').textContent = err.message; } e.target.value = ''; };
+// mask painting (white where the model may repaint)
+const mpos = (e) => { const r = aMask.getBoundingClientRect(); return { x: (e.clientX - r.left) * A.w / r.width, y: (e.clientY - r.top) * A.h / r.height }; };
+aMask.addEventListener('pointerdown', (e) => { if (!A.img) return; A.painting = true; aMask.setPointerCapture(e.pointerId); const p = mpos(e); mCtx.fillStyle = 'rgba(255,80,80,.6)'; mCtx.beginPath(); mCtx.arc(p.x, p.y, +$('#aBrush').value, 0, Math.PI*2); mCtx.fill(); });
+aMask.addEventListener('pointermove', (e) => { if (!A.painting) return; const p = mpos(e); mCtx.beginPath(); mCtx.arc(p.x, p.y, +$('#aBrush').value, 0, Math.PI*2); mCtx.fill(); });
+aMask.addEventListener('pointerup', () => A.painting = false);
+$('#aClearMask').onclick = () => mCtx.clearRect(0, 0, A.w, A.h);
+function maskDataUrl(w, h, paintFrom) { // black keep / white repaint
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d');
+  x.fillStyle = '#000'; x.fillRect(0, 0, w, h);
+  if (paintFrom) { x.globalCompositeOperation = 'source-over'; const t = document.createElement('canvas'); t.width = w; t.height = h; const tx = t.getContext('2d'); tx.drawImage(paintFrom, 0, 0); const d = tx.getImageData(0, 0, w, h); for (let i = 0; i < d.data.length; i += 4) { const on = d.data[i+3] > 10; d.data[i] = d.data[i+1] = d.data[i+2] = on ? 255 : 0; d.data[i+3] = 255; } x.putImageData(d, 0, 0); }
+  return c.toDataURL('image/png');
+}
+async function aRun(op, extra = {}) {
+  const prompt = $('#aPrompt').value.trim();
+  if (op === 'generate' && prompt.length < 2) { $('#aStatus').textContent = 'describe what you want first'; return; }
+  if (op !== 'generate' && !A.img) { $('#aStatus').textContent = 'upload or generate an image first'; return; }
+  const body = { op, prompt, by: me, ...extra };
+  if (op === 'generate') { body.width = 1024; body.height = 1024; if (A.img) body.image = aImg.toDataURL('image/png'); }
+  if (op === 'inpaint') { body.image = aImg.toDataURL('image/png'); body.mask = maskDataUrl(A.w, A.h, aMask); body.width = A.w; body.height = A.h; if (prompt.length < 2) { $('#aStatus').textContent = 'describe the change for the masked area'; return; } }
+  $('#aStatus').textContent = `${op}… 20–60s, a few cents`; document.querySelectorAll('#area .tools button').forEach(b => b.disabled = true);
+  try { const r = await api('/api/art', body); const im = await loadImg(r.url); aShow(im, r.url); $('#aStatus').textContent = `${op} done · $${Number(r.cost||0).toFixed(4)} · ${r.width}×${r.height}`; }
+  catch (e) { $('#aStatus').textContent = 'failed: ' + e.message; }
+  document.querySelectorAll('#area .tools button').forEach(b => b.disabled = false);
+}
+$('#aGen').onclick = () => aRun('generate');
+$('#aInpaint').onclick = () => aRun('inpaint');
+document.querySelectorAll('[data-out]').forEach(b => b.onclick = () => {
+  if (!A.img) { $('#aStatus').textContent = 'upload or generate an image first'; return; }
+  const d = b.dataset.out; const padX = d === 'left' || d === 'right' ? Math.round(A.w * .5) : d === 'all' ? Math.round(A.w * .25) : 0; const padY = d === 'top' || d === 'bottom' ? Math.round(A.h * .5) : d === 'all' ? Math.round(A.h * .25) : 0;
+  const W = Math.min(2048, Math.round((A.w + (d === 'all' ? padX*2 : padX)) / 16) * 16), H = Math.min(2048, Math.round((A.h + (d === 'all' ? padY*2 : padY)) / 16) * 16);
+  const ox = d === 'left' ? W - A.w : d === 'all' ? Math.round((W - A.w)/2) : 0, oy = d === 'top' ? H - A.h : d === 'all' ? Math.round((H - A.h)/2) : 0;
+  const c = document.createElement('canvas'); c.width = W; c.height = H; c.getContext('2d').drawImage(aImg, ox, oy);
+  const m = document.createElement('canvas'); m.width = W; m.height = H; const mx = m.getContext('2d'); mx.fillStyle = '#fff'; mx.fillRect(0, 0, W, H); mx.fillStyle = '#000'; mx.fillRect(ox, oy, A.w, A.h);
+  aRun('outpaint', { image: c.toDataURL('image/png'), mask: m.toDataURL('image/png'), width: W, height: H });
+});
+$('#aAvatar').onclick = async () => { if (!A.url) return; await api('/api/avatar/set', { agent: me, url: A.url }); $('#aStatus').textContent = 'that is you now'; };
+$('#aSprite').onclick = async () => { if (!A.url) return; await api('/api/avatar/set', { agent: me, url: A.url, sprite: true }); $('#aStatus').textContent = 'sitting at your desk'; };
+$('#aChat').onclick = async () => { if (!A.url) return; const t = prompt('Say something with it (optional)', '') ?? ''; await api('/api/send', { from: me, to: '*', kind: 'art', subject: t || 'from the little area', body: `${t}\n${location.origin}${A.url}`.trim() }); $('#aStatus').textContent = 'dropped in chat'; };
+
+poll(); setInterval(timeOfDay, 60_000);
+</script>
+</body>
+</html>

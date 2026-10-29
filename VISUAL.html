@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>agent-bus-poll</title>
+<script>
+  (function () {
+    function applyTheme(t) {
+      if (t === "light" || t === "dark") {
+        document.documentElement.setAttribute("data-theme", t);
+      }
+    }
+    try {
+      var m = (location.hash || "").match(/theme=(light|dark)/);
+      if (m) applyTheme(m[1]);
+    } catch (e) {}
+    window.addEventListener("message", function (event) {
+      var data = event && event.data;
+      if (data && data.type === "factory:set-theme") applyTheme(data.theme);
+    });
+  })();
+</script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300&family=Geist+Mono:wght@400&display=swap');
+
+  :root {
+    color-scheme: dark;
+    --bg: #000000;
+    --surface: #161413;
+    --border: #342F2D;
+    --border-soft: color-mix(in srgb, #342F2D 55%, transparent);
+    --text: #FFFFFF;
+    --muted: #9B8E87;
+    --footer: #948781;
+    --accent: #EE6018;
+    --success: #6FAB78;
+    --warning: #F0A330;
+    --error: #D9363E;
+    --grid: color-mix(in srgb, #342F2D 45%, transparent);
+    --axis: #9B8E87;
+    --bar-label: #000000;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #000000;
+    --surface: #161413;
+    --border: #342F2D;
+    --border-soft: color-mix(in srgb, #342F2D 55%, transparent);
+    --text: #FFFFFF;
+    --muted: #9B8E87;
+    --footer: #948781;
+    --accent: #EE6018;
+    --success: #6FAB78;
+    --warning: #F0A330;
+    --error: #D9363E;
+    --grid: color-mix(in srgb, #342F2D 45%, transparent);
+    --axis: #9B8E87;
+    --bar-label: #000000;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #F2F0F0;
+      --surface: #FFFFFF;
+      --border: #342F2D;
+      --border-soft: color-mix(in srgb, #342F2D 22%, transparent);
+      --text: #161413;
+      --muted: #948781;
+      --footer: #948781;
+      --accent: #EE6018;
+      --success: #6FAB78;
+      --warning: #F0A330;
+      --error: #D9363E;
+      --grid: color-mix(in srgb, #342F2D 18%, transparent);
+      --axis: #948781;
+      --bar-label: #000000;
+    }
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #F2F0F0;
+    --surface: #FFFFFF;
+    --border: #342F2D;
+    --border-soft: color-mix(in srgb, #342F2D 22%, transparent);
+    --text: #161413;
+    --muted: #948781;
+    --footer: #948781;
+    --accent: #EE6018;
+    --success: #6FAB78;
+    --warning: #F0A330;
+    --error: #D9363E;
+    --grid: color-mix(in srgb, #342F2D 18%, transparent);
+    --axis: #948781;
+    --bar-label: #000000;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Geist', system-ui, sans-serif;
+    font-weight: 300;
+    background: var(--bg);
+    color: var(--text);
+    letter-spacing: -0.01em;
+    padding: 32px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .mono {
+    font-family: 'Geist Mono', monospace;
+    font-weight: 400;
+  }
+
+  .container { max-width: 1200px; margin: 0 auto; }
+
+  /* Header */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 24px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 32px;
+  }
+  .header-left h1 {
+    font-size: 56px;
+    font-weight: 300;
+    letter-spacing: -0.01em;
+    line-height: 1.05;
+    color: var(--text);
+  }
+  .header-left .subtitle {
+    font-family: 'Geist Mono', monospace;
+    font-size: 14px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 10px;
+  }
+  .header-right { text-align: right; }
+  .run-badge {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  .run-badge .num { color: var(--accent); }
+  .timestamp {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    color: var(--footer);
+    margin-top: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Status banner */
+  .status-banner {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--success);
+    padding: 20px 24px;
+    margin-bottom: 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border-radius: 4px;
+  }
+  .status-icon { width: 36px; height: 36px; flex-shrink: 0; color: var(--success); }
+  .status-text .status-label {
+    font-family: 'Geist Mono', monospace;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--success);
+  }
+  .status-text .status-detail { font-size: 20px; color: var(--text); margin-top: 4px; }
+
+  /* Stat grid */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px;
+    border-radius: 4px;
+  }
+  .stat-value {
+    font-family: 'Geist', system-ui, sans-serif;
+    font-size: 48px;
+    font-weight: 300;
+    color: var(--accent);
+    line-height: 1;
+    font-feature-settings: 'ss09';
+  }
+  .stat-label {
+    font-family: 'Geist Mono', monospace;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-top: 12px;
+  }
+
+  /* Section heading */
+  .section-title {
+    font-family: 'Geist Mono', monospace;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Chart */
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px;
+    margin-bottom: 32px;
+    border-radius: 4px;
+  }
+  .chart-card .chart-title {
+    font-family: 'Geist Mono', monospace;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-bottom: 20px;
+  }
+  .bar-chart {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    height: 220px;
+    border-bottom: 1px solid var(--axis);
+    position: relative;
+  }
+  .grid-line {
+    position: absolute;
+    left: 0; right: 0;
+    height: 1px;
+    background: var(--grid);
+    pointer-events: none;
+  }
+  .bar-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    justify-content: flex-end;
+    position: relative;
+  }
+  .bar {
+    width: 100%;
+    background: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 2px;
+    min-height: 2px;
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 6px;
+  }
+  .bar-value {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    color: var(--bar-label);
+    font-feature-settings: 'ss09';
+  }
+  .bar-label {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 8px;
+    white-space: nowrap;
+  }
+
+  /* Two column */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .data-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px;
+    border-radius: 4px;
+  }
+  .data-card .card-title {
+    font-family: 'Geist Mono', monospace;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+
+  /* Table */
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    text-align: left;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-weight: 400;
+  }
+  td {
+    font-family: 'Geist', system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 300;
+    color: var(--text);
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  td.num {
+    font-family: 'Geist Mono', monospace;
+    text-align: right;
+    font-feature-settings: 'ss09';
+  }
+  tr:last-child td { border-bottom: none; }
+
+  /* Badge */
+  .badge {
+    display: inline-block;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 10px;
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .badge-done { border-color: var(--success); color: var(--success); }
+  .badge-active { border-color: var(--warning); color: var(--warning); }
+
+  /* Droid section */
+  .droid-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 24px;
+    margin-bottom: 32px;
+    border-radius: 4px;
+  }
+  .droid-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+  }
+  .droid-stat { text-align: center; }
+  .droid-stat .val {
+    font-family: 'Geist Mono', monospace;
+    font-size: 32px;
+    font-weight: 400;
+    color: var(--accent);
+    font-feature-settings: 'ss09';
+  }
+  .droid-stat .lbl {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  /* Footer */
+  .footer { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 32px; }
+  .footer-text {
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    color: var(--footer);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    line-height: 1.8;
+  }
+  .footer-text span.acc { color: var(--accent); }
+
+  .constraints { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .constraint-chip {
+    border: 1px solid var(--border-soft);
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-family: 'Geist Mono', monospace;
+    font-size: 12px;
+    color: var(--footer);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  @media (max-width: 768px) {
+    .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    .two-col { grid-template-columns: 1fr; }
+    .droid-grid { grid-template-columns: repeat(2, 1fr); }
+    .header { flex-direction: column; gap: 16px; }
+    .header-right { text-align: left; }
+    .header-left h1 { font-size: 36px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1>agent-bus-poll</h1>
+      <div class="subtitle">Bus poll for droid — scheduled automation</div>
+    </div>
+    <div class="header-right">
+      <div class="run-badge">RUN <span class="num">N/A</span></div>
+      <div class="timestamp">2026-08-15T20:51Z</div>
+    </div>
+  </div>
+
+  <!-- Status banner -->
+  <div class="status-banner">
+    <svg class="status-icon" viewBox="0 0 36 36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="18" cy="18" r="14"/>
+      <path d="M12 18l4 4 8-8"/>
+    </svg>
+    <div class="status-text">
+      <div class="status-label">Bus empty — no new messages for droid</div>
+      <div class="status-detail">Cursor 56 / Log 56 — parity held, no dispatch required</div>
+    </div>
+  </div>
+
+  <!-- Stat grid -->
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-value">56</div>
+      <div class="stat-label">Log lines</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">48</div>
+      <div class="stat-label">Valid messages</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">6.3</div>
+      <div class="stat-label">Days idle</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">0</div>
+      <div class="stat-label">Pending tasks for droid</div>
+    </div>
+  </div>
+
+  <!-- Traffic by day chart -->
+  <div class="chart-card">
+    <div class="chart-title">Bus traffic by day — messages per day</div>
+    <div class="bar-chart">
+      <div class="grid-line" style="top: 0%;"></div>
+      <div class="grid-line" style="top: 33%;"></div>
+      <div class="grid-line" style="top: 66%;"></div>
+      <div class="bar-col">
+        <div class="bar" style="height: 100%;"><span class="bar-value">27</span></div>
+        <div class="bar-label">07-25</div>
+      </div>
+      <div class="bar-col">
+        <div class="bar" style="height: 25.9%;"><span class="bar-value">7</span></div>
+        <div class="bar-label">07-26</div>
+      </div>
+      <div class="bar-col">
+        <div class="bar" style="height: 7.4%;"><span class="bar-value">2</span></div>
+        <div class="bar-label">07-28</div>
+      </div>
+      <div class="bar-col">
+        <div class="bar" style="height: 3.7%;"><span class="bar-value">1</span></div>
+        <div class="bar-label">07-30</div>
+      </div>
+      <div class="bar-col">
+        <div class="bar" style="height: 18.5%;"><span class="bar-value">5</span></div>
+        <div class="bar-label">08-03</div>
+      </div>
+      <div class="bar-col">
+        <div class="bar" style="height: 18.5%;"><span class="bar-value">5</span></div>
+        <div class="bar-label">08-04</div>
+      </div>
+      <div class="bar-col">
+        <div class="bar" style="height: 3.7%;"><span class="bar-value">1</span></div>
+        <div class="bar-label">08-09</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Two column: kinds + senders -->
+  <div class="two-col">
+    <div class="data-card">
+      <div class="card-title">Messages by kind</div>
+      <table>
+        <thead><tr><th>Kind</th><th style="text-align:right;">Count</th></tr></thead>
+        <tbody>
+          <tr><td>note</td><td class="num">19</td></tr>
+          <tr><td>task</td><td class="num">16</td></tr>
+          <tr><td>answer</td><td class="num">10</td></tr>
+          <tr><td>walk</td><td class="num">2</td></tr>
+          <tr><td>question</td><td class="num">1</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="data-card">
+      <div class="card-title">Messages by sender</div>
+      <table>
+        <thead><tr><th>Sender</th><th style="text-align:right;">Count</th></tr></thead>
+        <tbody>
+          <tr><td>claude-code</td><td class="num">36</td></tr>
+          <tr><td>droid</td><td class="num">6</td></tr>
+          <tr><td>cursor</td><td class="num">4</td></tr>
+          <tr><td>adam</td><td class="num">2</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Droid telemetry -->
+  <div class="section-title">Droid telemetry</div>
+  <div class="droid-section">
+    <div class="droid-grid">
+      <div class="droid-stat"><div class="val">12</div><div class="lbl">Direct to droid</div></div>
+      <div class="droid-stat"><div class="val">7</div><div class="lbl">Broadcasts received</div></div>
+      <div class="droid-stat"><div class="val">6</div><div class="lbl">Sent by droid</div></div>
+      <div class="droid-stat"><div class="val">0</div><div class="lbl">Pending tasks</div></div>
+    </div>
+  </div>
+
+  <!-- Two column: board + cursors -->
+  <div class="two-col">
+    <div class="data-card">
+      <div class="card-title">Board lanes</div>
+      <table>
+        <thead><tr><th>Lane</th><th>Owner</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>director-ui</td><td>cursor</td><td><span class="badge badge-active">active</span></td></tr>
+          <tr><td>beat-tracker</td><td>droid</td><td><span class="badge badge-done">done</span></td></tr>
+          <tr><td>thelma</td><td>droid</td><td><span class="badge badge-done">done</span></td></tr>
+          <tr><td>foley</td><td>claude-code</td><td><span class="badge badge-active">active</span></td></tr>
+          <tr><td>film-take</td><td>claude-code</td><td><span class="badge badge-active">active</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="data-card">
+      <div class="card-title">Cursor positions</div>
+      <table>
+        <thead><tr><th>Agent</th><th style="text-align:right;">Cursor</th></tr></thead>
+        <tbody>
+          <tr><td>droid</td><td class="num">56</td></tr>
+          <tr><td>cursor</td><td class="num">56</td></tr>
+          <tr><td>fable</td><td class="num">45</td></tr>
+          <tr><td>claude-code</td><td class="num">8</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:16px; padding-top:12px; border-top:1px solid var(--border-soft);">
+        <div style="font-family:'Geist Mono',monospace; font-size:12px; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); margin-bottom:8px;">Log integrity</div>
+        <table>
+          <tbody>
+            <tr><td>Valid messages</td><td class="num">48</td></tr>
+            <tr><td>Malformed lines</td><td class="num">8</td></tr>
+            <tr><td>Log bytes</td><td class="num">63,480</td></tr>
+            <tr><td>MD5 (stable)</td><td class="num" style="font-size:11px;">fd1691a7</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="footer-text">
+      agent-bus-poll — 2026-08-15T20:51Z<br>
+      bus read --agent droid --mark — <span class="acc">empty</span> — no outbound bus send issued
+    </div>
+    <div class="constraints">
+      <span class="constraint-chip">MESSAGES.jsonl append-only</span>
+      <span class="constraint-chip">Cursors not rewritten</span>
+      <span class="constraint-chip">No A2E calls</span>
+      <span class="constraint-chip">VISUAL.html rebuilt from scratch</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

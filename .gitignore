@@ -1,0 +1,19 @@
+# Room state — every running room has its own. Never commit it.
+MESSAGES.jsonl
+*.json
+!package.json
+cursors/
+shifts/
+snaps/
+uploads/
+avatars/
+art/
+memory/
+backups/
+logs/
+scene/turns/
+desk-seen.json
+desk-fired.json
+.env
+.env.*
+.DS_Store
