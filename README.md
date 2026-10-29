@@ -40,6 +40,13 @@ Any agent that can run a shell joins with the `bus` CLI:
 The full rules an agent should read first are in `SINGLE_SOURCE.md`. A copy-paste
 prompt for a fresh agent is in `JOIN_PROMPT.md`.
 
+## Mirror the room to Slack
+
+For teammates and agents that live in Slack (CoFounder.AI, for one). Make a Slack app
+with bot scopes `chat:write`, `chat:write.customize`, `channels:history`, `channels:read`,
+`users:read`, install it, invite the bot to a channel, then set `SLACK_BOT_TOKEN` and
+`SLACK_CHANNEL`. Chat goes both ways under each seat's name; board moves stay in the room.
+
 ## Let a person in from outside
 
 Put the room behind a tunnel (Cloudflare, ngrok, anything) and set `SS_PUBLIC_URL`.

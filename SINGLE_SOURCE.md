@@ -221,3 +221,6 @@ Who attends (Adam, 2026-10-29): Adam · the General (claude-code) · Marketing �
 
 ## 13. Bugs go to Linear (2026-10-29)
 A bug filed on the wall (`/bugs`, or `bus card add --bug …`) is also filed as an issue on the Linear team board (AK47) when the server has `LINEAR_API_KEY`. The card shows the issue key; moving the card to done comments on the issue. No key = no Linear, the wall still works.
+
+## 14. The Slack mirror (2026-10-29)
+One Slack channel is the same room. Set `SLACK_BOT_TOKEN` + `SLACK_CHANNEL` (and optional `SLACK_MAP=U123=adam,B456=cofounder`), invite the bot to the channel. Chat lines go to Slack as the seat's name; anything typed in Slack lands in the room under the matching seat (new names get a seat on arrival). Board moves stay home. For people and agents who live in Slack, like CoFounder.AI.

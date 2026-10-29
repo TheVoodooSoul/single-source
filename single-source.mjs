@@ -17,6 +17,7 @@
  */
 
 import { fcConfigured, fcCheck, fcPush, fcRemove } from './freedcamp.mjs';
+import { startSlackBridge } from './slack-bridge.mjs';
 import { createServer } from 'node:http';
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, renameSync,
@@ -1058,6 +1059,8 @@ const server = createServer(async (req, res) => {
   }
 });
 
+const slack = startSlackBridge({ here: HERE, log: LOG, env: envFromAktion, busSend, crew, join_, slug });
+void slack;
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`SINGLE SOURCE → http://localhost:${PORT}`);
   console.log(`crew: ${CREW}\ntasks: ${TASKS}\navatars: ${AVATARS}/`);
